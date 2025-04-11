@@ -21,7 +21,6 @@ detector = YoloV8Detector("../yolov8l.pt", logger)
 face_comparison_server_url = FACENET_SERVER_URL + "/compare/"
 client = AsyncIOMotorClient(MONGODB_URL)
 
-
 async def insert_detected_frames_separately(uuid: str, running_id: str, detected_frames: Dict[str, Any],
                                             frame_per_second: int = 30):
     """
@@ -39,8 +38,6 @@ async def insert_detected_frames_separately(uuid: str, running_id: str, detected
         await detected_frames_collection.insert_one(frame_document)
 
 
-
-
 # List to store processed frames and their indices
 annotated_frames = {}
 detections_frames = {}
@@ -48,7 +45,9 @@ detections_frames = {}
 # Initialize a queue for frames to be annotated
 frame_queue = queue.Queue()
 
-
+# input: min similarity, detected frames tuple, id, embedding
+# output: Adds annotated frame to global dictionary
+# main Steps: Detect similarity, draw bounding boxes
 def annotate_frame_worker(similarity_threshold, detected_frames, uuid, refrence_embeddings):
     """
     Worker function to annotate frames with detected faces.
@@ -78,14 +77,23 @@ def annotate_frame_worker(similarity_threshold, detected_frames, uuid, refrence_
             logger.info(f"Finished processing frame {frame_index}, marking as done")
             frame_queue.task_done()
 
-
+# Main video processing logic
+# Inputs: video_path (str), similarity_threshold (float), uuid (str), running_id (str)
+# Outputs: path to re-encoded output video
+# Steps:
+#   capture video frames
+#   run YOLO to detect faces
+#   for even frames: detect and annotate in threads
+#   for odd frames: pass directly
+#   reassemble annotated video and save to disk
+#   upload detection results to MongoDB
 async def process_and_annotate_video(video_path: str, similarity_threshold: float, uuid: str, running_id: str) -> str:
     """
     Process a video file to detect objects using YOLOv8 and annotate the video with the detected faces.
     """
     global annotated_frames  # Make sure the global dictionary is accessible
     annotated_frames = {}
-    cap = cv2.VideoCapture(video_path)
+    cap = cv2.VideoCapture(video_path) ### open video
     frame_per_second = int(cap.get(cv2.CAP_PROP_FPS))
     if not cap.isOpened():
         raise HTTPException(status_code=500, detail="Error opening video file")
@@ -170,7 +178,6 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
         raise HTTPException(status_code=500, detail="Re-encoded video file not found after processing")
 
     return reencoded_output_path
-
 
 def check_and_annotate(frame_index, frame):
     """
@@ -290,7 +297,11 @@ async def calculate_similarity(uuid, detected_image_base64):
     )
     return similarity
 
-
+## input:
+# file_path: str - path to processed video file
+# filename: str - video file name
+## output:
+# return video as streaming response
 def create_streaming_response(file_path: str, filename: str):
     logger.info(f"Creating streaming response for file: {file_path}")
     return StreamingResponse(
@@ -299,7 +310,7 @@ def create_streaming_response(file_path: str, filename: str):
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
 
-
+# Async generator to yield video file chunks
 async def iter_file(file_path: str):
     if not os.path.exists(file_path):
         logger.error(f"File not found: {file_path}")
@@ -309,7 +320,7 @@ async def iter_file(file_path: str):
         while chunk := file_like.read(1024):
             yield chunk
 
-
+# Retrieve frames previously detected from DB
 async def fetch_detected_frames(uuid: str, running_id: str):
     cursor = detected_frames_collection.find({"uuid": uuid, "running_id": running_id})
     frame_per_second = 30
@@ -328,7 +339,7 @@ async def fetch_detected_frames(uuid: str, running_id: str):
 
     return detected_frames
 
-
+# ffmpeg re-encoding of video
 def reencode_video(input_path, output_path):
     try:
         logger.info(f"Checking if {input_path} exists...")
@@ -365,7 +376,7 @@ def reencode_video(input_path, output_path):
         logger.error(f"Error occurred during re-encoding: {e}")
         logger.error(f"An unexpected error occurred during re-encoding: {e}")
 
-
+# Log video metadata
 def print_to_log_video_parameters(cap):
     logger.info(f"Number of frames: {cap.get(cv2.CAP_PROP_FRAME_COUNT)}")
     logger.info(f"Frame width: {cap.get(cv2.CAP_PROP_FRAME_WIDTH)}")

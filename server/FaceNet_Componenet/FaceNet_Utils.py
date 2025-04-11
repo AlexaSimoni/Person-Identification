@@ -6,6 +6,8 @@ from facenet_pytorch import MTCNN, InceptionResnetV1
 from PIL import Image
 import io
 from fastapi import UploadFile
+from numpy import floating
+from numpy._typing import _16Bit
 from sklearn.metrics.pairwise import cosine_similarity
 
 from server.Utils.db import embedding_collection
@@ -58,6 +60,7 @@ class FaceEmbedding:
             logger.error(f"Error in get_embedding: {e}")
         return None
 
+    ########################################################## useful for FlowNet - maximum similarity rate
     @staticmethod
     def compare_faces_embedding(embedding: np.ndarray, embedding_list: List[np.ndarray]) -> float:
         """
@@ -75,7 +78,7 @@ class FaceEmbedding:
 
         # Convert to percentages
         similarity_percentages = similarities[0] * 100
-        similarity_percentages = np.round(similarity_percentages, 2)
+        similarity_percentages: floating[_16Bit] = np.round(similarity_percentages, 2)
 
         # Log the similarity percentages (optional)
         logger.info(f"Similarity percentages:\n {similarity_percentages}")
@@ -109,13 +112,15 @@ class EmbeddingManager:
         )
         logger.info("Reference embeddings and average embedding calculated successfully")
 
+        ######################################################################## this needed for FlowNet later + change similarity barrier if needed
+
     async def process_detected_frames(self, uuid: str, face_embedding: FaceEmbedding) -> List[np.ndarray]:
         """
         Process detected frames and calculate embeddings for frames with similarity
         greater than 80% and not embedded.
         """
         cursor = detected_frames_collection.find(
-            {"uuid": uuid, "embedded": False, "frame_data.similarity": {"$gt": 80}})
+            {"uuid": uuid, "embedded": False, "frame_data.similarity": {"$gt": 80}})    ################# similarity rate
         new_embeddings = []
         existing_embeddings = await self.get_existing_embeddings(uuid)
         async for doc in cursor:
