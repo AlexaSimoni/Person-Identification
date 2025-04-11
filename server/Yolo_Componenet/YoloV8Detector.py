@@ -28,6 +28,7 @@ class YoloV8Detector:
             self.logger.info(f"Number of GPUs available: {torch.cuda.device_count()}\n"
                              f"GPU name: {torch.cuda.get_device_name(0)}")
 
+    ########################################### cropping the predicted object image path
     def predict(self, frame, frame_index):
         """
         Predict objects in a given frame.

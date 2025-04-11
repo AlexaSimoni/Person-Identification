@@ -10,8 +10,8 @@ import logging
 from server.Utils.Log_level import LogLevel, set_log_level
 from server.Yolo_Componenet.Yolo_Utils import process_and_annotate_video, create_streaming_response, logger as yolo_logger, \
     fetch_detected_frames
-from FaceNet_Componenet.FaceNet_Utils import embedding_manager, face_embedding
-from config.config import YOLO_SERVER_PORT, SIMILARITY_THRESHOLD
+from server.FaceNet_Componenet.FaceNet_Utils import embedding_manager, face_embedding
+from server.config.config import YOLO_SERVER_PORT, SIMILARITY_THRESHOLD
 from server.Utils.db import check_mongo, delete_many_detected_frames_collection
 from fastapi.middleware.cors import CORSMiddleware
 import torch
@@ -38,11 +38,13 @@ async def lifespan(app: FastAPI):
     logger.info("Application stopped.")
     yolo_logger.info("Application stopped.")
 
-
+################################################################################## changed
 app = FastAPI(
     lifespan=lifespan,
-    title="YOLOv8 and Face Comparison API",
-    description="This API allows you to process video files to detect objects using YOLOv8 and compare detected faces with a reference image using FaceNet."
+    #title="YOLOv8 and Face Comparison API",
+    title="YOLOv8 and continuous Face detection API",
+    #description="This API allows you to process video files to detect objects using YOLOv8 and compare detected faces with a reference image using FaceNet."
+    description="This API allows you to process video files to detect objects using YOLOv8, compare detected faces with a reference image using FaceNet, and trace them using FlowNet."
 )
 # noinspection PyTypeChecker
 app.add_middleware(
@@ -95,7 +97,7 @@ async def detect_and_annotate_video(uuid: str, running_id: str, file: UploadFile
         yolo_logger.error(f"Error in detect_and_annotate_video endpoint:\n {e}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
-
+######################################################################## later need to show the max similarity in FlowNet as well
 @app.post("/set_reference_image/", description="Set the reference images for face comparison.")
 async def set_reference_image(
         uuid: str,
@@ -110,7 +112,7 @@ async def set_reference_image(
         # Process images from files
         file_embeddings = await embedding_manager.process_images(files, face_embedding)
 
-        # Query detected_frames_collection for documents with similarity > 80 and the same uuid
+        # Query detected_frames_collection for documents with similarity > 80 and the same uuid ########!!! check or change later
         detected_embeddings = await embedding_manager.process_detected_frames(uuid, face_embedding)
 
         # Combine file embeddings and detected frame embeddings
@@ -148,7 +150,6 @@ async def get_detected_frames(uuid: str, running_id: str):
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
-
 @app.get("/health_facenet/", description="Health check endpoint to verify that the FaceNet application is running.")
 async def health_check_facenet():
     """
@@ -181,6 +182,22 @@ async def health_check_yolo():
         yolo_logger.error(f"Health check failed: {e}")
         return JSONResponse(content={"status": "unhealthy", "error": str(e)}, status_code=500)
 
+##################################################### have to create /health_flownet/ , health_check_flownet() , flow_logger,
+@app.get("/health_flownet/", description="Health check endpoint to verify that the FlowNet application is running.")
+async def health_check_flownet():
+    """
+    Health check endpoint to verify that the FlowNet application is running.
+    """
+    try:
+        if await check_mongo():
+            flow_logger.info("Health check successful.")
+            return JSONResponse(content={"status": "healthy"}, status_code=200)
+        else:
+            flow_logger.warning("MongoDB is not ready.")
+            return JSONResponse(content={"status": "unhealthy", "error": "MongoDB is not ready."}, status_code=503)
+    except Exception as e:
+        flow_logger.error(f"Health check failed: {e}")
+        return JSONResponse(content={"status": "unhealthy", "error": str(e)}, status_code=500)
 
 @app.delete("/purge_detected_frames/", description="Purge the detected frames collection.")
 async def purge_detected_frames():
