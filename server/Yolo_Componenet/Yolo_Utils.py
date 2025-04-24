@@ -13,6 +13,7 @@ from server.config.config import FACENET_SERVER_URL, MONGODB_URL
 from motor.motor_asyncio import AsyncIOMotorClient
 import threading
 import queue
+from server.FlowNet_Component.TrackingManager import TrackingManager  ##############################
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 detector = YoloV8Detector("../yolov8l.pt", logger)
 face_comparison_server_url = FACENET_SERVER_URL + "/compare/"
 client = AsyncIOMotorClient(MONGODB_URL)
+tracker_manager = TrackingManager()   ###############################################################
 
 async def insert_detected_frames_separately(uuid: str, running_id: str, detected_frames: Dict[str, Any],
                                             frame_per_second: int = 30):
@@ -139,6 +141,14 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
 
             logger.info(f"Processing frame {frame_index}/{total_frames}")
         else:
+           ################################################## FlowNet Update for Odd Frames
+            tracker_manager.update_all(frame)
+            for person in tracker_manager.get_all():
+                x, y, w, h = person.box
+                label = f"{person.person_id} | Best: {person.best_score:.2f}"
+                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
             # Directly add odd frames to the annotated_frames dictionary
             annotated_frames[frame_index] = frame
 
@@ -275,6 +285,11 @@ def annotate_frame(frame, frame_obj, similarity_threshold, detected_frames, uuid
 
             # Draw text in white
             cv2.putText(frame, text, (text_x, text_y), font, font_scale, (255, 255, 255), font_thickness)
+
+            ################################################### FlowNet: Register best match for tracking
+            box = (x1, y1, x2 - x1, y2 - y1)  # convert to (x, y, w, h)
+            tracker_manager.match_or_add(box, similarity, frame, uuid)
+
 
             detection.similarity = similarity
             detection.founded = True

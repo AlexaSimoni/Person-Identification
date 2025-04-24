@@ -34,6 +34,7 @@ class FlowTracker:
         self.last_frame = None           # previously processed frame
         self.last_box = None             # previously tracked bounding box
         self.frame_count = 0             # count of total frames seen
+        self.frame_update_interval = frame_update_interval  # Track every N frames only (adjustable)
 
     def update_track_frame(self, current_frame, current_box):
         # Step 0: Frame skipping — only apply update every N frames
@@ -60,9 +61,10 @@ class FlowTracker:
         w = max(1, min(w, w_frame - x))
         h = max(1, min(h, h_frame - y))
 
-        flow_region = flow[y:y + h, x:x + w]  # (h, w, 2)
-        dx = int(np.mean(flow_region[..., 0]))  # average horizontal motion
-        dy = int(np.mean(flow_region[..., 1]))  # average vertical motion
+        # Slice the flow map to the region of the previous box
+        flow_region = flow[y:y + h, x:x + w]  # (h, w, 2) - Region of interest for motion vectors
+        dx = int(np.mean(flow_region[..., 0]))  # average flow vector horizontal motion
+        dy = int(np.mean(flow_region[..., 1]))  # average flow vector vertical motion
 
         # Step 4: Shift box according to estimated motion
         new_x = max(0, min(x + dx, w_frame - w))
