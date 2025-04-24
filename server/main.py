@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 process_pool = None
 device = "cuda" if torch.cuda.is_available() else "cpu"
-
+flow_logger = logging.getLogger("flownet")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
