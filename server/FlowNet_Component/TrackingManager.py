@@ -4,32 +4,29 @@ from server.FlowNet_Component.TrackedPerson import TrackedPerson
 
 class TrackingManager:
     def __init__(self):
-        self.tracked_people = []
+        self.tracked_people = [] ######################### list of all currently tracked people
 
     def update_all(self, current_frame):
         for person in self.tracked_people:
-            person.update_frame(current_frame)
+            person.update_frame(current_frame) ########### Update the box of each tracked person using FlowNet
 
+    #################### check match of the new detection to an existing tracked person
     def match_or_add(self, new_box, new_score, frame, person_id=""):
-        threshold = 50  # Distance threshold to consider a match
-
-        matched = False
+        threshold_iou = 0.3  ############################# Minimum IoU to consider a match
         for person in self.tracked_people:
-            iou = self._box_iou(person.box, new_box)
-            if iou > 0.3:
+            if self._box_iou(person.box, new_box) > threshold_iou:
+                ########################################## If matched update the tracked box and best score
                 person.maybe_update_match(new_score, new_box)
-                matched = True
-                break
+                return
 
-        if not matched:
-            new_person = TrackedPerson(new_box, new_score, frame, person_id)
-            self.tracked_people.append(new_person)
+        ################################################## No existing match found — add as a new tracked person
+        self.tracked_people.append(TrackedPerson(new_box, new_score, frame, person_id))
 
     def get_all(self):
-        return self.tracked_people
+        return self.tracked_people ####################### Return all tracked people
 
     def _box_iou(self, boxA, boxB):
-        # Compute Intersection over Union
+        # Compute IoU between two boxes
         ax, ay, aw, ah = boxA
         bx, by, bw, bh = boxB
 
