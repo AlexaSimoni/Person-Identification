@@ -20,7 +20,7 @@ class SimpleFlowNet:
         # Step 2: Compute dense optical flow using the Fa method
         # which estimates motion for every pixel between two frames, result is a flow field: an array of (dx, dy) vectors
         flow = cv2.calcOpticalFlowFarneback(
-            prev_gray, next_gray,
+            prev_gray, next_gray, None,
             pyr_scale=0.5, levels=3, winsize=15,
             iterations=3, poly_n=5, poly_sigma=1.2,
             flags=0
