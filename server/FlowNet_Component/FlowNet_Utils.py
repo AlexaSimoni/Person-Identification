@@ -1,5 +1,20 @@
 import numpy as np
-from server.FlowNet_Component.SimpleFlowNet import SimpleFlowNet
+import logging
+import threading
+#import asyncio
+
+import time
+#from server.FlowNet_Component.SimpleFlowNet import SimpleFlowNet
+#from server.Yolo_Componenet.Yolo_Utils import all_even_frames
+#from server.FlowNet_Component.Cropper import Cropper
+#from server.FlowNet_Component.SimpleFlowNet import SimpleFlowNet
+#from server.Yolo_Componenet.Yolo_Utils import all_even_frames
+#from server.FlowNet_Component.FlowNet_Utils import update_bbox_with_optical_flow
+from server.FlowNet_Component.TrackingManager import TrackingManager
+#from server.FlowNet_Component.TrackingManager import tracker_manager
+#from server.Yolo_Componenet.Yolo_Utils import all_even_frames
+from server.Utils.framesGlobals import annotated_frames, detections_frames, all_even_frames
+
 
 # ==========================================
 # FlowNet_Component: Optical Flow Tracking
@@ -9,8 +24,13 @@ from server.FlowNet_Component.SimpleFlowNet import SimpleFlowNet
 # It avoids rerunning YOLO on every frame by estimating motion.
 
 # Adjustable frame interval for when to apply tracking updates
-frame_update_interval = 2  # Only update every N frames (for performance)
+#frame_update_interval = 2  # Only update every N frames (for performance)
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+flow_tracking_started = False
+flow_tracking_lock = threading.Lock()
 # ---------------------------------------------------
 # Class: FlowTracker
 # ---------------------------------------------------
@@ -28,52 +48,26 @@ frame_update_interval = 2  # Only update every N frames (for performance)
 #
 # OUTPUT:
 #   Updated box: (x + dx, y + dy, w, h), shifted by motion
-class FlowTracker:
-    def __init__(self):
-        self.flow_net = SimpleFlowNet()  # optical flow computer
-        self.last_frame = None           # previously processed frame
-        self.last_box = None             # previously tracked bounding box
-        self.frame_count = 0             # count of total frames seen
-        self.frame_update_interval = frame_update_interval  # Track every N frames only (adjustable)
 
-    def update_track_frame(self, current_frame, current_box):
-        # Step 0: Frame skipping — only apply update every N frames
-        self.frame_count += 1
-        if self.frame_count % frame_update_interval != 0:
-            return current_box  # No update — return previous box
 
-        # Step 1: If this is the first frame, just store and return the input box
-        if self.last_frame is None or self.last_box is None:
-            self.last_frame = current_frame
-            self.last_box = current_box
-            return current_box
+def start_flow_tracking():
+    global flow_tracking_started
+    with flow_tracking_lock:
+        if flow_tracking_started:
+            return
+        flow_tracking_started = True
+        threading.Thread(target=flow_tracking_loop, daemon=True).start()
+        logger.info("FlowNet tracking thread started.")
 
-        # Step 2: Compute optical flow from last_frame → current_frame
-        flow = self.flow_net.compute_flow(self.last_frame, current_frame)
+def flow_tracking_loop():
+    logger.info("FlowNet tracking loop running...")
+    last_index = -1
 
-        # Step 3: Use the flow in the region of the old box to estimate motion
-        x, y, w, h = self.last_box
-        h_frame, w_frame, _ = current_frame.shape
+    while True:
+        if all_even_frames:
+            latest_index = max(all_even_frames.keys())
+            if latest_index > last_index:
+                last_index = latest_index
+                TrackingManager.update_all(latest_index)
 
-        # Clamp box to image dimensions to avoid overflow
-        x = max(0, min(x, w_frame - 1))
-        y = max(0, min(y, h_frame - 1))
-        w = max(1, min(w, w_frame - x))
-        h = max(1, min(h, h_frame - y))
-
-        # Slice the flow map to the region of the previous box
-        flow_region = flow[y:y + h, x:x + w]  # (h, w, 2) - Region of interest for motion vectors
-        dx = int(np.mean(flow_region[..., 0]))  # average flow vector horizontal motion
-        dy = int(np.mean(flow_region[..., 1]))  # average flow vector vertical motion
-
-        # Step 4: Shift box according to estimated motion
-        new_x = max(0, min(x + dx, w_frame - w))
-        new_y = max(0, min(y + dy, h_frame - h))
-        new_box = (new_x, new_y, w, h)
-
-        # Step 5: Update internal state
-        self.last_box = new_box
-        self.last_frame = current_frame
-
-        # OUTPUT: updated bounding box
-        return new_box
+        time.sleep(0.03)  # sleep to avoid busy loop
