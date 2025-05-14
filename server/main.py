@@ -10,6 +10,7 @@ import logging
 from server.Utils.Log_level import LogLevel, set_log_level
 from server.Yolo_Componenet.Yolo_Utils import process_and_annotate_video, create_streaming_response, logger as yolo_logger, \
     fetch_detected_frames
+from server.FlowNet_Component.FlowNet_Utils import logger as flow_logger
 from server.FaceNet_Componenet.FaceNet_Utils import embedding_manager, face_embedding
 from server.config.config import YOLO_SERVER_PORT, SIMILARITY_THRESHOLD
 from server.Utils.db import check_mongo, delete_many_detected_frames_collection
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 process_pool = None
 device = "cuda" if torch.cuda.is_available() else "cpu"
-flow_logger = logging.getLogger("flownet")
+#flow_logger = logging.getLogger("flownet")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -32,11 +33,14 @@ async def lifespan(app: FastAPI):
     """
     logger.info("Starting up...")
     yolo_logger.info("Starting up...")
+    flow_logger.info("Starting up...")
     yield
     logger.info("Shutting down...")
     yolo_logger.info("Shutting down...")
+    flow_logger.info("Shutting down...")
     logger.info("Application stopped.")
     yolo_logger.info("Application stopped.")
+    flow_logger.info("Application stopped.")
 
 ################################################################################## changed
 app = FastAPI(
@@ -72,6 +76,7 @@ async def set_logging_level(request: LogLevel):
     try:
         set_log_level(request.name, yolo_logger)
         set_log_level(request.name, logger)
+        set_log_level(request.name, flow_logger)
         return JSONResponse(status_code=200, content={"message": f"Logging level set to {request.name}"})
     except Exception as e:
         logger.error(f"Error setting logging level: {e}")
