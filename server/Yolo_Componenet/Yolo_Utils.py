@@ -13,7 +13,11 @@ from server.config.config import FACENET_SERVER_URL, MONGODB_URL
 from motor.motor_asyncio import AsyncIOMotorClient
 import threading
 import queue
+
 from server.FlowNet_Component.TrackingManager import TrackingManager  ##############################
+from server.FlowNet_Component.FlowNet_Utils import start_flow_tracking
+from server.Utils.framesGlobals import annotated_frames, detections_frames, all_even_frames
+
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -22,6 +26,10 @@ detector = YoloV8Detector("../yolov8l.pt", logger)
 face_comparison_server_url = FACENET_SERVER_URL + "/compare/"
 client = AsyncIOMotorClient(MONGODB_URL)
 tracker_manager = TrackingManager()   ###############################################################
+
+#flow_tracking_started = False
+#flow_tracking_lock = threading.Lock()
+
 
 async def insert_detected_frames_separately(uuid: str, running_id: str, detected_frames: Dict[str, Any],
                                             frame_per_second: int = 30):
@@ -40,10 +48,18 @@ async def insert_detected_frames_separately(uuid: str, running_id: str, detected
         await detected_frames_collection.insert_one(frame_document)
 
 
+
+
 # List to store processed frames and their indices
+all_even_frames.clear()
+detections_frames.clear()
+annotated_frames.clear()
+
+"""
 annotated_frames = {}
 detections_frames = {}
-
+all_even_frames = {}
+"""
 # Initialize a queue for frames to be annotated
 frame_queue = queue.Queue()
 
@@ -54,7 +70,7 @@ def annotate_frame_worker(similarity_threshold, detected_frames, uuid, refrence_
     """
     Worker function to annotate frames with detected faces.
     """
-    global annotated_frames
+    #global annotated_frames
     while True:
         try:
             item = frame_queue.get()
@@ -73,7 +89,7 @@ def annotate_frame_worker(similarity_threshold, detected_frames, uuid, refrence_
 
         except Exception as e:
             logger.error(f"Error in annotate_frame_worker: {e}")
-            frame_queue.task_done()  # Ensure the queue task is marked as done even if there's an error
+            #frame_queue.task_done()  # Ensure the queue task is marked as done even if there's an error
 
         finally:
             logger.info(f"Finished processing frame {frame_index}, marking as done")
@@ -93,8 +109,11 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
     """
     Process a video file to detect objects using YOLOv8 and annotate the video with the detected faces.
     """
-    global annotated_frames  # Make sure the global dictionary is accessible
-    annotated_frames = {}
+    #global annotated_frames  # Make sure the global dictionary is accessible
+    #annotated_frames = {}
+   ## global all_even_frames  # to make acces for flownet check
+    #all_even_frames = {}
+
     cap = cv2.VideoCapture(video_path) ### open video
     frame_per_second = int(cap.get(cv2.CAP_PROP_FPS))
     if not cap.isOpened():
@@ -133,6 +152,9 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
 
         # Queue even frames for annotation processing
         if frame_index % 2 == 0:
+            # Directly add even frames for flownet use
+            all_even_frames[frame_index] = frame
+
             # Detect faces
             frame_obj = detector.predict(frame, frame_index=frame_index)
 
@@ -141,13 +163,27 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
 
             logger.info(f"Processing frame {frame_index}/{total_frames}")
         else:
-           ################################################## FlowNet Update for Odd Frames
+            ################################################## FlowNet Update for Odd Frames
+
+            # Draw FlowNet-tracked bounding boxes on odd frames
+            for tracker in tracker_manager.get_all():
+                if tracker.last_box is not None:
+                    x, y, w, h = tracker.last_box
+                    label = f"FlowNet | Best: {tracker.best_score:.2f}%"
+                    logger.info(f"FlowNet box for {tracker.uuid} at frame {frame_index}: {tracker.last_box}")
+
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 165, 255), 2)  # Orange box
+                    cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
+
+            """
             tracker_manager.update_all(frame)
             for person in tracker_manager.get_all():
                 x, y, w, h = person.box
                 label = f"{person.person_id} | Best: {person.best_score:.2f}"
                 cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
                 cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+"""
+
 
             # Directly add odd frames to the annotated_frames dictionary
             annotated_frames[frame_index] = frame
@@ -255,6 +291,7 @@ def annotate_frame(frame, frame_obj, similarity_threshold, detected_frames, uuid
     for detection, similarity in zip(frame_obj.detections, similarities):
 
         if similarity is not None and similarity > similarity_threshold:
+
             logger.info(f"Similarity score: {similarity:.2f}% for detection: {detection.frame_index}, Accepted")
             x1, y1, x2, y2 = detection.coordinates
             detections_frames[frame_index] = (detection.coordinates, similarity)
@@ -288,8 +325,9 @@ def annotate_frame(frame, frame_obj, similarity_threshold, detected_frames, uuid
 
             ################################################### FlowNet: Register best match for tracking
             box = (x1, y1, x2 - x1, y2 - y1)  # convert to (x, y, w, h)
-            tracker_manager.match_or_add(box, similarity, frame, uuid)
+            tracker_manager.match_or_add(box, similarity, frame, uuid,SIMILARITY_THRESHOLD=similarity_threshold)
 
+            start_flow_tracking() ###################################
 
             detection.similarity = similarity
             detection.founded = True
