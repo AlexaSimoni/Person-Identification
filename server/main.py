@@ -18,19 +18,16 @@ from fastapi.middleware.cors import CORSMiddleware
 import torch
 from fastapi import UploadFile, Form
 
-# Set up logging
+#Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 process_pool = None
 device = "cuda" if torch.cuda.is_available() else "cpu"
-#flow_logger = logging.getLogger("flownet")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Context manager to log application startup and shutdown.
-    """
+    #Context manager to log application startup and shutdown
     logger.info("Starting up...")
     yolo_logger.info("Starting up...")
     flow_logger.info("Starting up...")
@@ -42,7 +39,6 @@ async def lifespan(app: FastAPI):
     yolo_logger.info("Application stopped.")
     flow_logger.info("Application stopped.")
 
-################################################################################## changed
 app = FastAPI(
     lifespan=lifespan,
     #title="YOLOv8 and Face Comparison API",
@@ -50,7 +46,7 @@ app = FastAPI(
     #description="This API allows you to process video files to detect objects using YOLOv8 and compare detected faces with a reference image using FaceNet."
     description="This API allows you to process video files to detect objects using YOLOv8, compare detected faces with a reference image using FaceNet, and trace them using FlowNet."
 )
-# noinspection PyTypeChecker
+#noinspection PyTypeChecker
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Allows all origins
@@ -60,19 +56,13 @@ app.add_middleware(
 )
 
 
-
 class SimilarityThresholdRequest(BaseModel):
-    """
-    Pydantic model for the similarity threshold request.
-    """
+    #Pydantic model for the similarity threshold request
     similarity_threshold: Optional[float] = SIMILARITY_THRESHOLD
-
 
 @app.post("/set_logging_level/", description="Set the logging level dynamically.")
 async def set_logging_level(request: LogLevel):
-    """
-    Set the logging level dynamically.
-    """
+    #Set the logging level dynamically
     try:
         set_log_level(request.name, yolo_logger)
         set_log_level(request.name, logger)
@@ -85,9 +75,7 @@ async def set_logging_level(request: LogLevel):
 @app.post("/detect_and_annotate/", response_description="Annotated video file")
 async def detect_and_annotate_video(uuid: str, running_id: str, file: UploadFile = File(...),
                                     similarity_threshold: float = 20.0):
-    """
-    Process a video file to detect objects using YOLOv8 and annotate the video with the detected
-    """
+    #Process a video file to detect objects using YOLOv8 and annotate the video with the detected
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
             tmp.write(await file.read())
@@ -102,31 +90,28 @@ async def detect_and_annotate_video(uuid: str, running_id: str, file: UploadFile
         yolo_logger.error(f"Error in detect_and_annotate_video endpoint:\n {e}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
-######################################################################## later need to show the max similarity in FlowNet as well
 @app.post("/set_reference_image/", description="Set the reference images for face comparison.")
 async def set_reference_image(
         uuid: str,
         files: List[UploadFile] = File(...),
         user_json: str = Form(...)
 ):
-    """
-    Set the reference images for face comparison , calculate the embeddings, and save them to the database.
-    Returns the number of embeddings saved.
-    """
+    #Set the reference images for face comparison , calculate the embeddings, and save them to the database
+    #Returns the number of embeddings saved
     try:
-        # Process images from files
+        #Process images from files
         file_embeddings = await embedding_manager.process_images(files, face_embedding)
 
-        # Query detected_frames_collection for documents with similarity > 80 and the same uuid ########!!! check or change later
+        #Query detected_frames_collection for documents with similarity > 80 and the same uuid #######!!! check or change later
         detected_embeddings = await embedding_manager.process_detected_frames(uuid, face_embedding)
 
-        # Combine file embeddings and detected frame embeddings
+        #Combine file embeddings and detected frame embeddings
         new_embeddings = file_embeddings + detected_embeddings
 
-        # Parse the JSON string into a dictionary
+        #Parse the JSON string into a dictionary
         user_details = json.loads(user_json)
 
-        # Save unique embeddings to embedding_collection along with user details
+        #Save unique embeddings to embedding_collection along with user details
         if new_embeddings:
             await embedding_manager.save_embeddings_to_db(uuid, new_embeddings, user_details=user_details)
 
@@ -141,9 +126,7 @@ async def set_reference_image(
 
 @app.get("/get_detected_frames/", description="Get the detected frames from the last processed video.")
 async def get_detected_frames(uuid: str, running_id: str):
-    """
-    Get the detected frames from running_id.
-    """
+    #Get the detected frames from running_id
     try:
         detected_frames = await fetch_detected_frames(uuid, running_id)
         if detected_frames and detected_frames:
@@ -157,9 +140,7 @@ async def get_detected_frames(uuid: str, running_id: str):
 
 @app.get("/health_facenet/", description="Health check endpoint to verify that the FaceNet application is running.")
 async def health_check_facenet():
-    """
-    Health check endpoint to verify that the FaceNet application is running.
-    """
+    #Health check endpoint to verify that the FaceNet application is running
     try:
         if check_mongo():
             logger.info("Health check successful.")
@@ -173,9 +154,7 @@ async def health_check_facenet():
 
 @app.get("/health_yolo/", description="Health check endpoint to verify that the YOLO application is running.")
 async def health_check_yolo():
-    """
-    Health check endpoint to verify that the YOLO application is running.
-    """
+    #Health check endpoint to verify that the YOLO application is running
     try:
         if await check_mongo():
             yolo_logger.info("Health check successful.")
@@ -187,12 +166,9 @@ async def health_check_yolo():
         yolo_logger.error(f"Health check failed: {e}")
         return JSONResponse(content={"status": "unhealthy", "error": str(e)}, status_code=500)
 
-##################################################### have to create /health_flownet/ , health_check_flownet() , flow_logger,
 @app.get("/health_flownet/", description="Health check endpoint to verify that the FlowNet application is running.")
 async def health_check_flownet():
-    """
-    Health check endpoint to verify that the FlowNet application is running.
-    """
+    #Health check endpoint to verify that the FlowNet application is running
     try:
         if await check_mongo():
             flow_logger.info("Health check successful.")
@@ -206,9 +182,7 @@ async def health_check_flownet():
 
 @app.delete("/purge_detected_frames/", description="Purge the detected frames collection.")
 async def purge_detected_frames():
-    """
-    Purge the detected frames collection.
-    """
+    #Purge the detected frames collection
     try:
         delete_many_detected_frames_collection()
         return JSONResponse(content={"message": "Detected frames collection purged successfully."}, status_code=200)
@@ -216,10 +190,6 @@ async def purge_detected_frames():
         yolo_logger.error(f"Error purging detected frames collection: {e}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
-
-
 if __name__ == "__main__":
-    """
-    Start the FastAPI application.
-    """
+    #Start the FastAPI application
     uvicorn.run(app, host="0.0.0.0", port=YOLO_SERVER_PORT)  # Adjust the port as needed
