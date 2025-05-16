@@ -1,57 +1,27 @@
-import numpy as np
 import logging
 import threading
-#import asyncio
-
 import time
-#from server.FlowNet_Component.SimpleFlowNet import SimpleFlowNet
-#from server.Yolo_Componenet.Yolo_Utils import all_even_frames
-#from server.FlowNet_Component.Cropper import Cropper
-#from server.FlowNet_Component.SimpleFlowNet import SimpleFlowNet
-#from server.Yolo_Componenet.Yolo_Utils import all_even_frames
-#from server.FlowNet_Component.FlowNet_Utils import update_bbox_with_optical_flow
+
+import cv2
+
 from server.FlowNet_Component.TrackingManager import TrackingManager
-#from server.FlowNet_Component.TrackingManager import tracker_manager
-#from server.Yolo_Componenet.Yolo_Utils import all_even_frames
-from server.Utils.framesGlobals import annotated_frames, detections_frames, all_even_frames
+from server.Utils.framesGlobals import all_even_frames
+from server.config.config import USE_FLOWNETS
 
 
-# ==========================================
-# FlowNet_Component: Optical Flow Tracking
-# ==========================================
-# This module tracks a previously detected object (e.g. a person)
-# using optical flow to update the bounding box over time.
-# It avoids rerunning YOLO on every frame by estimating motion.
-
-# Adjustable frame interval for when to apply tracking updates
-#frame_update_interval = 2  # Only update every N frames (for performance)
-
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logger.info(f"Using {'FlowNetS' if USE_FLOWNETS else 'SimpleFlowNet (Farneback)'} for optical flow.")
 
+#Singleton control to start tracking only once
 flow_tracking_started = False
 flow_tracking_lock = threading.Lock()
-# ---------------------------------------------------
-# Class: FlowTracker
-# ---------------------------------------------------
-# This class manages the tracking of a previously-detected region (box)
-# using the optical flow field from SimpleFlowNet.
-#
-# Usage:
-# - After detecting a person with YOLO and verifying with FaceNet,
-#   pass the bounding box to this tracker.
-# - It will update the box based on motion in later frames.
-#
-# INPUTS:
-#   current_frame: RGB frame at current timestep
-#   current_box: (x, y, w, h) of the last known person location
-#
-# OUTPUT:
-#   Updated box: (x + dx, y + dy, w, h), shifted by motion
 
+tracking_manager = TrackingManager()
 
 def start_flow_tracking():
+    #Start the background FlowNet tracking loop once
     global flow_tracking_started
+
     with flow_tracking_lock:
         if flow_tracking_started:
             return
@@ -60,6 +30,8 @@ def start_flow_tracking():
         logger.info("FlowNet tracking thread started.")
 
 def flow_tracking_loop():
+    #Background loop that applies FlowNet tracking to new frames
+    #Continuously checks for the latest frame index and updates tracked boxes
     logger.info("FlowNet tracking loop running...")
     last_index = -1
 
@@ -68,6 +40,35 @@ def flow_tracking_loop():
             latest_index = max(all_even_frames.keys())
             if latest_index > last_index:
                 last_index = latest_index
-                TrackingManager.update_all(latest_index)
+                tracking_manager.update_all(latest_index)
 
-        time.sleep(0.03)  # sleep to avoid busy loop
+        time.sleep(0.03)  #Sleep to avoid busy loop (CPU)
+
+def get_tracking_manager():
+    return tracking_manager
+
+def draw_tracking_boxes(frame, frame_index):
+    #Draw tracked bounding boxes from FlowNet on the given frame
+    #Used during annotation of even frames only
+    tracker_manager = get_tracking_manager()
+
+    for tracker in tracker_manager.get_all():
+        if tracker.last_box is not None:
+            x, y, w, h = tracker.last_box
+            label = f"FlowNet | Best: {tracker.best_score:.2f}%"
+            logger.info(f"FlowNet box for {tracker.uuid} at frame {frame_index}: {tracker.last_box}")
+
+            #Draw bounding box in orange
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 165, 255), 2)
+
+            #Label
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.5
+            font_thickness = 2
+            text_size = cv2.getTextSize(label, font, font_scale, font_thickness)[0]
+            text_x = x
+            text_y = y - 10 if y - 10 > 10 else y + text_size[1] + 10
+
+            cv2.rectangle(frame, (text_x, text_y - text_size[1] - 5),
+                          (text_x + text_size[0], text_y + 5), (0, 165, 255), cv2.FILLED)
+            cv2.putText(frame, label, (text_x, text_y), font, font_scale, (255, 255, 255), font_thickness)
