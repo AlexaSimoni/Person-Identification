@@ -10,4 +10,8 @@ YOLO_FOLDER = os.getenv("YOLO_FOLDER",join(ROOT_PATH, "Yolo_Componenet"))
 SIMILARITY_THRESHOLD = os.getenv("SIMILARITY_THRESHOLD", 30.0)
 #MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://root:example@localhost:27017/?authMechanism=DEFAULT")
 MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
-
+FLOWNET_FOLDER = os.getenv("FLOWNET_FOLDER", join(ROOT_PATH, "FlowNet_Component", "FlowNetPytorch"))
+#FLOWNET_MODEL_PATH = os.getenv("FLOWNET_MODEL_PATH", join(ROOT_PATH, "FlowNet_Component", "checkpoints", "FlowNetS_checkpoint.pth.tar"))
+FLOWNET_MODEL_PATH = os.getenv("FLOWNET_MODEL_PATH", join(ROOT_PATH, "FlowNet_Component", "checkpoints", "flownets_from_caffe.pth"))
+#USE_FLOWNETS = os.getenv("USE_FLOWNETS", "false").lower() == "true"
+USE_FLOWNETS = True
