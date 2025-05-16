@@ -9,33 +9,41 @@ from fastapi.responses import StreamingResponse
 from server.FaceNet_Componenet.FaceNet_Utils import embedding_manager, face_embedding
 from server.Utils.db import detected_frames_collection, embedding_collection
 from server.Yolo_Componenet.YoloV8Detector import YoloV8Detector
-from server.config.config import FACENET_SERVER_URL, MONGODB_URL
+from server.config.config import FACENET_SERVER_URL, MONGODB_URL, SIMILARITY_THRESHOLD
 from motor.motor_asyncio import AsyncIOMotorClient
 import threading
 import queue
-
-from server.FlowNet_Component.TrackingManager import TrackingManager  ##############################
-from server.FlowNet_Component.FlowNet_Utils import start_flow_tracking
+from server.FlowNet_Component.FlowNet_Utils import start_flow_tracking, get_tracking_manager, draw_tracking_boxes
 from server.Utils.framesGlobals import annotated_frames, detections_frames, all_even_frames
-
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 detector = YoloV8Detector("../yolov8l.pt", logger)
 face_comparison_server_url = FACENET_SERVER_URL + "/compare/"
 client = AsyncIOMotorClient(MONGODB_URL)
-tracker_manager = TrackingManager()   ###############################################################
+tracker_manager = get_tracking_manager()
 
-#flow_tracking_started = False
-#flow_tracking_lock = threading.Lock()
+#List to store processed frames and their indices
+"""
+annotated_frames = {}
+detections_frames = {}
+all_even_frames = {}
+"""
+#made as globals
 
+#Initialize a queue for frames to be annotated
+frame_queue = queue.Queue()
+
+#Clear old frame states
+all_even_frames.clear()
+detections_frames.clear()
+annotated_frames.clear()
 
 async def insert_detected_frames_separately(uuid: str, running_id: str, detected_frames: Dict[str, Any],
                                             frame_per_second: int = 30):
-    """
-    Insert detected frames separately into the MongoDB collection.
-    """
+    #Insert detected frames separately into the MongoDB collection
     for frame_index, frame_data in detected_frames.items():
         frame_document = {
             "uuid": uuid,
@@ -47,30 +55,8 @@ async def insert_detected_frames_separately(uuid: str, running_id: str, detected
         }
         await detected_frames_collection.insert_one(frame_document)
 
-
-
-
-# List to store processed frames and their indices
-all_even_frames.clear()
-detections_frames.clear()
-annotated_frames.clear()
-
-"""
-annotated_frames = {}
-detections_frames = {}
-all_even_frames = {}
-"""
-# Initialize a queue for frames to be annotated
-frame_queue = queue.Queue()
-
-# input: min similarity, detected frames tuple, id, embedding
-# output: Adds annotated frame to global dictionary
-# main Steps: Detect similarity, draw bounding boxes
-def annotate_frame_worker(similarity_threshold, detected_frames, uuid, refrence_embeddings):
-    """
-    Worker function to annotate frames with detected faces.
-    """
-    #global annotated_frames
+def annotate_frame_worker(similarity_threshold, detected_frames, uuid, reference_embeddings):
+    #Worker function to annotate frames with detected faces
     while True:
         try:
             item = frame_queue.get()
@@ -78,48 +64,32 @@ def annotate_frame_worker(similarity_threshold, detected_frames, uuid, refrence_
                 break
 
             frame, frame_obj, frame_index = item
-
-            # Annotate the frame
+            #Annotate the frame
             logger.info(f"Annotating frame {frame_obj.frame_index}")
-            annotate_frame(frame, frame_obj, similarity_threshold, detected_frames, uuid, refrence_embeddings,
-                           frame_index)
+            annotate_frame(frame, frame_obj, similarity_threshold, detected_frames, uuid,
+                           reference_embeddings, frame_index)
+            #added for flownet bbox
+            if frame_index % 2 == 0:
+                draw_tracking_boxes(frame, frame_index)
 
             # Safely store the annotated frame in the shared dictionary
             annotated_frames[frame_index] = frame
 
         except Exception as e:
             logger.error(f"Error in annotate_frame_worker: {e}")
-            #frame_queue.task_done()  # Ensure the queue task is marked as done even if there's an error
 
         finally:
             logger.info(f"Finished processing frame {frame_index}, marking as done")
             frame_queue.task_done()
 
-# Main video processing logic
-# Inputs: video_path (str), similarity_threshold (float), uuid (str), running_id (str)
-# Outputs: path to re-encoded output video
-# Steps:
-#   capture video frames
-#   run YOLO to detect faces
-#   for even frames: detect and annotate in threads
-#   for odd frames: pass directly
-#   reassemble annotated video and save to disk
-#   upload detection results to MongoDB
 async def process_and_annotate_video(video_path: str, similarity_threshold: float, uuid: str, running_id: str) -> str:
-    """
-    Process a video file to detect objects using YOLOv8 and annotate the video with the detected faces.
-    """
-    #global annotated_frames  # Make sure the global dictionary is accessible
-    #annotated_frames = {}
-   ## global all_even_frames  # to make acces for flownet check
-    #all_even_frames = {}
-
     cap = cv2.VideoCapture(video_path) ### open video
     frame_per_second = int(cap.get(cv2.CAP_PROP_FPS))
     if not cap.isOpened():
         raise HTTPException(status_code=500, detail="Error opening video file")
     print_to_log_video_parameters(cap)
-    refrence_embeddings = await embedding_manager.get_reference_embeddings(uuid)
+    reference_embeddings = await embedding_manager.get_reference_embeddings(uuid)
+
     output_path = video_path.replace(".mp4", "_annotated.mp4")
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Using mp4v codec for MPEG-4
     out = cv2.VideoWriter(output_path, fourcc, cap.get(cv2.CAP_PROP_FPS),
@@ -138,7 +108,7 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
     threads = []
     for i in range(num_annotation_threads):
         t = threading.Thread(target=annotate_frame_worker,
-                             args=(similarity_threshold, detected_frames, uuid, refrence_embeddings))
+                             args=(similarity_threshold, detected_frames, uuid, reference_embeddings))
         t.start()
         threads.append(t)
 
@@ -149,56 +119,31 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
 
         frame_index += 1
 
-
-        # Queue even frames for annotation processing
+        #Queue even frames for annotation processing
         if frame_index % 2 == 0:
-            # Directly add even frames for flownet use
+            #Directly add even frames for flownet use
             all_even_frames[frame_index] = frame
-
-            # Detect faces
+            #Detect faces
             frame_obj = detector.predict(frame, frame_index=frame_index)
-
-            # Queue the frame for annotation
+            #Queue the frame for annotation
             frame_queue.put((frame, frame_obj, frame_index))
 
             logger.info(f"Processing frame {frame_index}/{total_frames}")
         else:
-            ################################################## FlowNet Update for Odd Frames
-
-            # Draw FlowNet-tracked bounding boxes on odd frames
-            for tracker in tracker_manager.get_all():
-                if tracker.last_box is not None:
-                    x, y, w, h = tracker.last_box
-                    label = f"FlowNet | Best: {tracker.best_score:.2f}%"
-                    logger.info(f"FlowNet box for {tracker.uuid} at frame {frame_index}: {tracker.last_box}")
-
-                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 165, 255), 2)  # Orange box
-                    cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
-
-            """
-            tracker_manager.update_all(frame)
-            for person in tracker_manager.get_all():
-                x, y, w, h = person.box
-                label = f"{person.person_id} | Best: {person.best_score:.2f}"
-                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-"""
-
-
-            # Directly add odd frames to the annotated_frames dictionary
+            #Directly add odd frames to the annotated_frames dictionary
             annotated_frames[frame_index] = frame
 
-    # Wait for all frames to be processed
+    #Wait for all frames to be processed
     frame_queue.join()
     logger.info("All frames processed")
 
-    # Stop the worker threads
+    #Stop the worker threads
     for _ in range(num_annotation_threads):
         frame_queue.put(None)
     for t in threads:
         t.join()
 
-    # Write the frames to output video
+    #Write the frames to output video
     for index in range(total_frames):
         frame = annotated_frames.get(index)
         if frame is not None:
@@ -209,15 +154,12 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
     cap.release()
     out.release()
     logger.info(f"Video processing complete , output file saved at {output_path}")
-    # Save detected frames to MongoDB separately
+    #Save detected frames to MongoDB separately
     await insert_detected_frames_separately(uuid=uuid, running_id=running_id, detected_frames=detected_frames,
                                             frame_per_second=frame_per_second)
 
-
-
-    # Re-encode the annotated video
+    #Re-encode the annotated video
     reencoded_output_path = video_path.replace(".mp4", "_annotated_reencoded.mp4")
-
     reencode_video(output_path, reencoded_output_path)
 
     if not os.path.exists(reencoded_output_path):
@@ -226,108 +168,99 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
     return reencoded_output_path
 
 def check_and_annotate(frame_index, frame):
-    """
-    Check if the detections in the previous and next frames are similar and annotate the current frame.
-    """
+    #Check if the detections in the previous and next frames are similar and annotate the current frame
+    #used for gap closeup in frames bounding
     diff_margin = 100
-    # check the before and after frame detections and if their cordinates are similar add fiction annotation
+    #check the before and after frame detections and if their coordinates are similar add fiction annotation
     if frame_index - 1 in detections_frames and frame_index + 1 in detections_frames:
-        # get the cordinates of the detections
+        #get the coordinates of the detections
         detection1 = detections_frames[frame_index - 1]
         detection2 = detections_frames[frame_index + 1]
-        # check if the cordinates are similar by a margin of error
+        #check if the coordinates are similar by a margin of error
         if abs(detection1[0][0] - detection2[0][0]) < diff_margin and abs(
                 detection1[0][1] - detection2[0][1]) < diff_margin:
-            # add the cordinates to the frame
+            #add the coordinates to the frame
             x1, y1, x2, y2 = detection1[0]
-            # Ensure coordinates are within frame boundaries
+            #Ensure coordinates are within frame boundaries
             x1 = max(0, x1)
             y1 = max(0, y1)
             x2 = min(frame.shape[1], x2)
             y2 = min(frame.shape[0], y2)
 
-            # Draw bounding box in red
+            #Draw bounding box in red
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
-            # Position text above the bounding box and ensure it fits within the frame
+            #Position text above the bounding box and ensure it fits within the frame
             text = f"{detection1[1]:.2f}%"
             font = cv2.FONT_HERSHEY_COMPLEX
             font_scale = 0.8
             font_thickness = 2
 
-            # Calculate text size and position
+            #Calculate text size and position
             text_size = cv2.getTextSize(text, font, font_scale, font_thickness)[0]
             text_x = x1
             text_y = y1 - 10 if y1 - 10 > 10 else y1 + text_size[1] + 10
 
-            # Draw background rectangle for text
+            #Draw background rectangle for text
             cv2.rectangle(frame, (text_x, text_y - text_size[1] - 5),
                           (text_x + text_size[0], text_y + 5), (0, 0, 255), cv2.FILLED)
 
-            # Draw text in white
+            #Draw text in white
             cv2.putText(frame, text, (text_x, text_y), font, font_scale, (255, 255, 255), font_thickness)
             return True
 
-
-
 def wrapper(data):
-    """
-    Wrapper function to calculate similarity between embeddings.
-    """
+    #Wrapper function to calculate similarity between embeddings
     return embedding_manager.calculate_similarity(
         data[0],
         data[1]
     )
 
-
-def annotate_frame(frame, frame_obj, similarity_threshold, detected_frames, uuid, refrence_embeddings, frame_index):
-    """
-    Annotate a frame with detected faces.
-    """
+def annotate_frame(frame, frame_obj, similarity_threshold, detected_frames, uuid, reference_embeddings, frame_index):
+    #Annotate a frame with detected faces, compute similarity, and register FlowNet tracking
     logger.info(f"Found in frame {frame_obj.frame_index}: {len(frame_obj.detections)} detections")
-    datas = [(refrence_embeddings, detection.image_base_64) for detection in frame_obj.detections]
+    #Pair each detection with the reference embeddings
+    datas = [(reference_embeddings, detection.image_base_64) for detection in frame_obj.detections]
     similarities = [wrapper(data) for data in datas]
 
     for detection, similarity in zip(frame_obj.detections, similarities):
-
         if similarity is not None and similarity > similarity_threshold:
 
             logger.info(f"Similarity score: {similarity:.2f}% for detection: {detection.frame_index}, Accepted")
             x1, y1, x2, y2 = detection.coordinates
             detections_frames[frame_index] = (detection.coordinates, similarity)
 
-            # Ensure coordinates are within frame boundaries
+            Ensure coordinates are within frame boundaries
             x1 = max(0, x1)
             y1 = max(0, y1)
             x2 = min(frame.shape[1], x2)
             y2 = min(frame.shape[0], y2)
 
-            # Draw bounding box in red
+            #Draw bounding box in red
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
-            # Position text above the bounding box and ensure it fits within the frame
+            #Draw similarity score label
             text = f"{similarity:.2f}%"
             font = cv2.FONT_HERSHEY_COMPLEX
             font_scale = 0.8
             font_thickness = 2
 
-            # Calculate text size and position
+            #Calculate text size and position
             text_size = cv2.getTextSize(text, font, font_scale, font_thickness)[0]
             text_x = x1
             text_y = y1 - 10 if y1 - 10 > 10 else y1 + text_size[1] + 10
 
-            # Draw background rectangle for text
+            #Draw background rectangle for text
             cv2.rectangle(frame, (text_x, text_y - text_size[1] - 5),
                           (text_x + text_size[0], text_y + 5), (0, 0, 255), cv2.FILLED)
-
-            # Draw text in white
             cv2.putText(frame, text, (text_x, text_y), font, font_scale, (255, 255, 255), font_thickness)
 
-            ################################################### FlowNet: Register best match for tracking
+            #Register FlowNet tracker
             box = (x1, y1, x2 - x1, y2 - y1)  # convert to (x, y, w, h)
             tracker_manager.match_or_add(box, similarity, frame, uuid,SIMILARITY_THRESHOLD=similarity_threshold)
 
-            start_flow_tracking() ###################################
+            #Ensure FlowNet thread is running
+            start_flow_tracking()
 
             detection.similarity = similarity
             detection.founded = True
@@ -339,9 +272,7 @@ def annotate_frame(frame, frame_obj, similarity_threshold, detected_frames, uuid
 
 
 async def calculate_similarity(uuid, detected_image_base64):
-    """
-    Calculate similarity between detected image and reference embeddings.
-    """
+    #Calculate similarity between detected image and reference embeddings for the given UUID
     reference_embeddings = await embedding_manager.get_reference_embeddings(uuid)
     similarity = await embedding_manager.calculate_similarity(
         reference_embeddings,
@@ -350,12 +281,8 @@ async def calculate_similarity(uuid, detected_image_base64):
     )
     return similarity
 
-## input:
-# file_path: str - path to processed video file
-# filename: str - video file name
-## output:
-# return video as streaming response
 def create_streaming_response(file_path: str, filename: str):
+    #Return a StreamingResponse to send the annotated video file as a downloadable attachment
     logger.info(f"Creating streaming response for file: {file_path}")
     return StreamingResponse(
         iter_file(file_path),
@@ -365,6 +292,7 @@ def create_streaming_response(file_path: str, filename: str):
 
 # Async generator to yield video file chunks
 async def iter_file(file_path: str):
+    # Async generator to yield video file chunks
     if not os.path.exists(file_path):
         logger.error(f"File not found: {file_path}")
         raise HTTPException(status_code=404, detail="File not found")
@@ -373,16 +301,20 @@ async def iter_file(file_path: str):
         while chunk := file_like.read(1024):
             yield chunk
 
-# Retrieve frames previously detected from DB
+
 async def fetch_detected_frames(uuid: str, running_id: str):
+    #Retrieve all previously detected frames from MongoDB for the given UUID and running_id
+    #Used by the get_detected_frames API
     cursor = detected_frames_collection.find({"uuid": uuid, "running_id": running_id})
-    frame_per_second = 30
+    frame_per_second = 30   #default
     detected_frames = {}
     async for document in cursor:
         frame_index = document["frame_index"]
         frame_data = document["frame_data"]
 
         detected_frames[frame_index] = frame_data
+
+    #Append user metadata if available
     if detected_frames:
         frame_per_second = document["frame_per_second"]
     extra_details = await embedding_collection.find_one({"uuid": uuid})
@@ -394,6 +326,7 @@ async def fetch_detected_frames(uuid: str, running_id: str):
 
 # ffmpeg re-encoding of video
 def reencode_video(input_path, output_path):
+    #Re-encode the annotated video using ffmpeg to ensure compatibility and compression
     try:
         logger.info(f"Checking if {input_path} exists...")
         if os.path.exists(input_path):
@@ -429,8 +362,9 @@ def reencode_video(input_path, output_path):
         logger.error(f"Error occurred during re-encoding: {e}")
         logger.error(f"An unexpected error occurred during re-encoding: {e}")
 
-# Log video metadata
+
 def print_to_log_video_parameters(cap):
+    #Print video metadata (frame count, resolution, FPS)
     logger.info(f"Number of frames: {cap.get(cv2.CAP_PROP_FRAME_COUNT)}")
     logger.info(f"Frame width: {cap.get(cv2.CAP_PROP_FRAME_WIDTH)}")
     logger.info(f"Frame height: {cap.get(cv2.CAP_PROP_FRAME_HEIGHT)}")
