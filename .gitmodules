@@ -1,0 +1,3 @@
+[submodule "server/FlowNet_Component/FlowNetPytorch"]
+	path = server/FlowNet_Component/FlowNetPytorch
+	url = https://github.com/ClementPinard/FlowNetPytorch.git
