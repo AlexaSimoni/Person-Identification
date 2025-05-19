@@ -11,7 +11,7 @@ flow_component_path = os.path.join(ROOT_PATH, "server", "FlowNet_Component")
 if flow_component_path not in sys.path:
     sys.path.append(flow_component_path)
     """
-from server.FlowNet_Component.FlowNetPytorch.models.FlowNetS  import FlowNetS
+from server.FlowNet_Component.FlowNetPytorch.models.FlowNetS import FlowNetS
 #Wraps the pretrained FlowNetS CNN model for optical flow inference
 class FlowNetSWrapper:
     def __init__(self, checkpoint_path: str):

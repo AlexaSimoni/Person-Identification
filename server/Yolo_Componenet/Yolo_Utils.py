@@ -230,7 +230,7 @@ def annotate_frame(frame, frame_obj, similarity_threshold, detected_frames, uuid
             x1, y1, x2, y2 = detection.coordinates
             detections_frames[frame_index] = (detection.coordinates, similarity)
 
-            Ensure coordinates are within frame boundaries
+            #Ensure coordinates are within frame boundaries
             x1 = max(0, x1)
             y1 = max(0, y1)
             x2 = min(frame.shape[1], x2)
@@ -290,9 +290,9 @@ def create_streaming_response(file_path: str, filename: str):
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
 
-# Async generator to yield video file chunks
+#Async generator to yield video file chunks
 async def iter_file(file_path: str):
-    # Async generator to yield video file chunks
+    #Async generator to yield video file chunks
     if not os.path.exists(file_path):
         logger.error(f"File not found: {file_path}")
         raise HTTPException(status_code=404, detail="File not found")
