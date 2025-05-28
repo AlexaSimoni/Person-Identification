@@ -14,7 +14,8 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import threading
 import queue
 from server.FlowNet_Component.FlowNet_Utils import start_flow_tracking, get_tracking_manager, draw_tracking_boxes
-from server.Utils.framesGlobals import annotated_frames, detections_frames, all_even_frames
+#from server.Utils.framesGlobals import annotated_frames, detections_frames, all_even_frames, dir_path
+import server.Utils.framesGlobals as framesGlobals
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -37,9 +38,10 @@ all_even_frames = {}
 frame_queue = queue.Queue()
 
 #Clear old frame states
-all_even_frames.clear()
-detections_frames.clear()
-annotated_frames.clear()
+framesGlobals.all_even_frames.clear()
+framesGlobals.detections_frames.clear()
+framesGlobals.annotated_frames.clear()
+#dir_path.clear()
 
 async def insert_detected_frames_separately(uuid: str, running_id: str, detected_frames: Dict[str, Any],
                                             frame_per_second: int = 30):
@@ -69,11 +71,12 @@ def annotate_frame_worker(similarity_threshold, detected_frames, uuid, reference
             annotate_frame(frame, frame_obj, similarity_threshold, detected_frames, uuid,
                            reference_embeddings, frame_index)
             #added for flownet bbox
-            if frame_index % 2 == 0:
-                draw_tracking_boxes(frame, frame_index)
+            #if frame_index % 2 == 0:
+            #    draw_tracking_boxes(frame, frame_index)
+            draw_tracking_boxes(frame, frame_index)
 
             # Safely store the annotated frame in the shared dictionary
-            annotated_frames[frame_index] = frame
+            framesGlobals.annotated_frames[frame_index] = frame
 
         except Exception as e:
             logger.error(f"Error in annotate_frame_worker: {e}")
@@ -89,6 +92,17 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
         raise HTTPException(status_code=500, detail="Error opening video file")
     print_to_log_video_parameters(cap)
     reference_embeddings = await embedding_manager.get_reference_embeddings(uuid)
+    dir_temp=os.path.dirname(video_path)
+    if not dir_temp or not os.path.isdir(dir_temp):
+        raise HTTPException(status_code=500, detail="Invalid or missing directory path (dir_temp)")
+    logger.info(f"[yolo_utils] temp dir set to: {dir_temp}")
+    framesGlobals.dir_path = os.path.join(dir_temp,"flow_debug")
+    os.makedirs(framesGlobals.dir_path, exist_ok=True)
+    if not framesGlobals.dir_path or not os.path.isdir(framesGlobals.dir_path):
+        raise HTTPException(status_code=500, detail="Invalid or missing directory path (dir_path)")
+    logger.info(f"[yolo_utils_flow] Global dir_path set to: {framesGlobals.dir_path}")
+
+
 
     output_path = video_path.replace(".mp4", "_annotated.mp4")
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Using mp4v codec for MPEG-4
@@ -118,11 +132,12 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
             break
 
         frame_index += 1
+        framesGlobals.all_even_frames[frame_index] = frame
 
         #Queue even frames for annotation processing
         if frame_index % 2 == 0:
             #Directly add even frames for flownet use
-            all_even_frames[frame_index] = frame
+            #framesGlobals.all_even_frames[frame_index] = frame
             #Detect faces
             frame_obj = detector.predict(frame, frame_index=frame_index)
             #Queue the frame for annotation
@@ -131,7 +146,7 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
             logger.info(f"Processing frame {frame_index}/{total_frames}")
         else:
             #Directly add odd frames to the annotated_frames dictionary
-            annotated_frames[frame_index] = frame
+            framesGlobals.annotated_frames[frame_index] = frame
 
     #Wait for all frames to be processed
     frame_queue.join()
@@ -145,10 +160,10 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
 
     #Write the frames to output video
     for index in range(total_frames):
-        frame = annotated_frames.get(index)
+        frame = framesGlobals.annotated_frames.get(index)
         if frame is not None:
-            if index % 2 == 1:
-                check_and_annotate(index, frame)
+            #if index % 2 == 1:
+                #check_and_annotate(index, frame)
             out.write(frame)
 
     cap.release()
@@ -172,10 +187,10 @@ def check_and_annotate(frame_index, frame):
     #used for gap closeup in frames bounding
     diff_margin = 100
     #check the before and after frame detections and if their coordinates are similar add fiction annotation
-    if frame_index - 1 in detections_frames and frame_index + 1 in detections_frames:
+    if frame_index - 1 in framesGlobals.detections_frames and frame_index + 1 in framesGlobals.detections_frames:
         #get the coordinates of the detections
-        detection1 = detections_frames[frame_index - 1]
-        detection2 = detections_frames[frame_index + 1]
+        detection1 = framesGlobals.detections_frames[frame_index - 1]
+        detection2 = framesGlobals.detections_frames[frame_index + 1]
         #check if the coordinates are similar by a margin of error
         if abs(detection1[0][0] - detection2[0][0]) < diff_margin and abs(
                 detection1[0][1] - detection2[0][1]) < diff_margin:
@@ -228,7 +243,7 @@ def annotate_frame(frame, frame_obj, similarity_threshold, detected_frames, uuid
 
             logger.info(f"Similarity score: {similarity:.2f}% for detection: {detection.frame_index}, Accepted")
             x1, y1, x2, y2 = detection.coordinates
-            detections_frames[frame_index] = (detection.coordinates, similarity)
+            framesGlobals.detections_frames[frame_index] = (detection.coordinates, similarity)
 
             #Ensure coordinates are within frame boundaries
             x1 = max(0, x1)
@@ -257,7 +272,8 @@ def annotate_frame(frame, frame_obj, similarity_threshold, detected_frames, uuid
 
             #Register FlowNet tracker
             box = (x1, y1, x2 - x1, y2 - y1)  # convert to (x, y, w, h)
-            tracker_manager.match_or_add(box, similarity, frame, uuid,SIMILARITY_THRESHOLD=similarity_threshold)
+            #tracker_manager.match_or_add(box, similarity, frame, uuid,SIMILARITY_THRESHOLD=similarity_threshold)
+            tracker_manager.match_or_add(box, similarity, frame_index, uuid, SIMILARITY_THRESHOLD=similarity_threshold)
 
             #Ensure FlowNet thread is running
             start_flow_tracking()

@@ -3,7 +3,11 @@ import sys
 import torch
 import numpy as np
 import cv2
+import logging
+
 from torchvision import transforms
+
+from server.Utils.helpers import ensure_dir_exists_if_needed
 from server.config.config import ROOT_PATH, FLOWNET_MODEL_PATH
 # Add FlowNetPytorch models directory to path
 """
@@ -13,6 +17,11 @@ if flow_component_path not in sys.path:
     """
 from server.FlowNet_Component.FlowNetPytorch.models.FlowNetS import FlowNetS
 #Wraps the pretrained FlowNetS CNN model for optical flow inference
+#from server.config.config import FLOW_VIS_DIR
+import server.Utils.framesGlobals as framesGlobals
+
+logger = logging.getLogger(__name__)
+
 class FlowNetSWrapper:
     def __init__(self, checkpoint_path: str):
         print(">>> checkpoint_path =", checkpoint_path)
@@ -47,11 +56,12 @@ class FlowNetSWrapper:
         input_tensor = torch.cat([tensor1, tensor2], dim=0).unsqueeze(0).to(self.device)
         return input_tensor
 
-    def compute_flow(self, img1: np.ndarray, img2: np.ndarray) -> np.ndarray:
+    def compute_flow(self, img1: np.ndarray, img2: np.ndarray, debug_uuid: str = None, frame_index: int = None) -> np.ndarray:
         #Compute optical flow between two frames using FlowNetS.
         #img1: First frame (BGR)
         #img2: Second frame (BGR)
         #return: Flow as (H, W, 2)
+        logger.info(f"[FlowNetSWrapper] compute_flow() called | uuid={debug_uuid} frame={frame_index}")
 
         input_tensor = self.preprocess_frames(img1, img2)
 
@@ -60,4 +70,40 @@ class FlowNetSWrapper:
 
         #Transpose from (2, H, W) to (H, W, 2)
         flow = np.transpose(flow, (1, 2, 0))
+
+        # === Debug: Print average flow magnitude ===
+        flow_magnitude = np.linalg.norm(flow, axis=2)
+        avg_magnitude = np.mean(flow_magnitude)
+        logger.info(f"[FlowNetSWrapper] Avg flow magnitude: {avg_magnitude:.3f}")
+
+        # === Optional: Save visual flow map ===
+        try:
+            if debug_uuid is not None and frame_index is not None and framesGlobals.dir_path is not None:
+                logger.info(f"[FlowNetSWrapper] Attempting to save flow vis to: {framesGlobals.dir_path}")
+                #os.makedirs(dir_path, exist_ok=True)
+                save_path = os.path.join(framesGlobals.dir_path, f"{debug_uuid}_{frame_index}.jpg")
+                if os.path.isfile(save_path):
+                    logger.info(f"[FlowNetSWrapper] Successfully saved debug image at: {save_path}")
+                else:
+                    logger.error(f"[FlowNetSWrapper] Failed to save debug image — file not found: {save_path}")
+
+                vis = self.visualize_flow(flow)
+                cv2.imwrite(save_path, vis)
+                logger.info(f"[FlowNetSWrapper] Successfully wrote to: {save_path}")
+        except Exception as e:
+            logger.error(f"[FlowNetSWrapper] Failed to save flow visualization: {e}")
+
         return flow
+
+    def visualize_flow(self, flow: np.ndarray) -> np.ndarray:
+        hsv = np.zeros((flow.shape[0], flow.shape[1], 3), dtype=np.uint8)
+        mag, ang = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+        hsv[..., 0] = ang * 180 / np.pi / 2
+        hsv[..., 1] = 255
+        hsv[..., 2] = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX)
+        return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+    def get_debug_dir_from_video(self, video_path: str) -> str:
+        video_dir = os.path.dirname(video_path)
+        debug_dir = os.path.join(video_dir, "flow_vis")
+        return debug_dir

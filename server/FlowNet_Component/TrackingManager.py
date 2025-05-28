@@ -18,7 +18,7 @@ class TrackingManager:
             logger.info("[TrackingManager] Using SimpleFlowNet (Farneback)")
             self.flow_net = SimpleFlowNet()
 
-    def match_or_add(self, box, similarity, frame, uuid, SIMILARITY_THRESHOLD):
+    def match_or_add(self, box, similarity, frame_index, uuid, SIMILARITY_THRESHOLD):
         #Register or update a person for FlowNet tracking
         #Only update tracker if similarity is above the threshold
         if uuid not in self.trackers:
@@ -26,22 +26,41 @@ class TrackingManager:
             logger.info(f"[FlowNet] Tracker created for UUID {uuid}")
 
         tracker = self.trackers[uuid]
+        #if tracker.last_box is None and similarity >= SIMILARITY_THRESHOLD:
+        if similarity >= SIMILARITY_THRESHOLD:
+            # Only initialize ONCE from FaceNet
+            tracker.last_box = box
+            tracker.last_frame_index =frame_index
+            tracker.frames_since_last_match = 0
 
+            #tracker.best_score = similarity
+            if similarity > tracker.best_score:
+               tracker.best_score = similarity
+            logger.info(
+                f"[FlowNet] Initialized tracker for UUID {uuid} at frame {tracker.last_frame_index} | sim: {similarity:.2f}%")
+
+        # Optional debug: prevent further updates
+        else:
+            logger.debug(f"[FlowNet] Skipping FaceNet update for UUID {uuid} (tracker already initialized)")
+        """
         if similarity >= SIMILARITY_THRESHOLD:
             frame_index = self.get_frame_index_from_frame(frame)
 
             #Update current tracker state
             tracker.last_box = box
             tracker.last_frame_index = frame_index
+            tracker.frames_since_last_match = 0
 
             if similarity > tracker.best_score:
                 tracker.best_score = similarity
 
             logger.info(f"[FlowNet-IoU] Updated tracker for UUID {uuid} at frame {frame_index} | similarity: {similarity:.2f}%")
-
+        """
     def update_all(self, frame_index):
         #Update all tracked boxes using FlowNet
         for tracker in self.trackers.values():
+            logger.info(f"[TrackingManager] Updating tracker {tracker.uuid} using {type(tracker.flow_net).__name__}")
+
             tracker.update_track_frame(frame_index)
 
 
