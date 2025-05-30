@@ -81,11 +81,17 @@ class FlowNetSWrapper:
             if debug_uuid is not None and frame_index is not None and framesGlobals.dir_path is not None:
                 logger.info(f"[FlowNetSWrapper] Attempting to save flow vis to: {framesGlobals.dir_path}")
                 #os.makedirs(dir_path, exist_ok=True)
+
                 save_path = os.path.join(framesGlobals.dir_path, f"{debug_uuid}_{frame_index}.jpg")
+                """
                 if os.path.isfile(save_path):
                     logger.info(f"[FlowNetSWrapper] Successfully saved debug image at: {save_path}")
                 else:
                     logger.error(f"[FlowNetSWrapper] Failed to save debug image — file not found: {save_path}")
+                """
+                vis = self.visualize_flow(flow)
+                cv2.imwrite(save_path, vis)
+                logger.info(f"[FlowNetSWrapper] Flow visualization saved at: {save_path}")
 
                 vis = self.visualize_flow(flow)
                 cv2.imwrite(save_path, vis)

@@ -26,11 +26,17 @@ class TrackingManager:
             logger.info(f"[FlowNet] Tracker created for UUID {uuid}")
 
         tracker = self.trackers[uuid]
-        #if tracker.last_box is None and similarity >= SIMILARITY_THRESHOLD:
+        # Only initialize ONCE from FaceNet
+
+       # if tracker.last_box is None and similarity >= SIMILARITY_THRESHOLD:
         if similarity >= SIMILARITY_THRESHOLD:
-            # Only initialize ONCE from FaceNet
             tracker.last_box = box
+            #FlowTracker.last_frame_index = frame_index
+            #FlowTracker.last_box = box
+            tracker.initial_facenet_box = box  # <-- store it
+
             tracker.last_frame_index =frame_index
+            #FlowTracker.frames_since_last_match = 0
             tracker.frames_since_last_match = 0
 
             #tracker.best_score = similarity
