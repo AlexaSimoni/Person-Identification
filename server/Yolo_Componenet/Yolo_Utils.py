@@ -16,6 +16,8 @@ import queue
 from server.FlowNet_Component.FlowNet_Utils import start_flow_tracking, get_tracking_manager, draw_tracking_boxes
 #from server.Utils.framesGlobals import annotated_frames, detections_frames, all_even_frames, dir_path
 import server.Utils.framesGlobals as framesGlobals
+from server.FlowNet_Component.FlowNet_Utils import insert_flowdetected_frames
+
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -172,6 +174,7 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
     #Save detected frames to MongoDB separately
     await insert_detected_frames_separately(uuid=uuid, running_id=running_id, detected_frames=detected_frames,
                                             frame_per_second=frame_per_second)
+    await insert_flowdetected_frames(uuid=uuid, running_id=running_id, frame_per_second=frame_per_second)
 
     #Re-encode the annotated video
     reencoded_output_path = video_path.replace(".mp4", "_annotated_reencoded.mp4")

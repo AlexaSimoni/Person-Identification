@@ -2,9 +2,20 @@ import numpy as np
 import logging
 import cv2
 import time
+import base64
+from PIL import Image
+import io
+import asyncio
+
 from server.Utils.framesGlobals import all_even_frames, detections_frames, dir_path
 from server.FlowNet_Component.Cropper import Cropper
 from server.config.config import SIMILARITY_THRESHOLD
+from server.FaceNet_Componenet.FaceNet_Utils import face_embedding
+from server.Utils.db import detected_frames_collection
+
+
+from server.Utils import framesGlobals
+
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +69,12 @@ class FlowTracker:
         if updated_box is not None:
             self.last_box = updated_box
             self.last_frame_index = current_frame_index
+
+            # Save cropped FlowNet region to DB
+            curr_frame = all_even_frames[current_frame_index]
+            #self.save_flownet_crop_to_db(curr_frame, updated_box, current_frame_index)
+            #asyncio.create_task(self.save_flownet_crops_to_db(curr_frame, updated_box, current_frame_index))
+            self.store_flow_detection(curr_frame, updated_box, current_frame_index)
 
         return self.last_box
 
@@ -175,3 +192,28 @@ class FlowTracker:
         return x_new, y_new, new_w, new_h
 
         #return x_new, y_new, w, h
+
+    def store_flow_detection(self, frame: np.ndarray, box: tuple, frame_index: int):
+        x, y, w, h = box
+        h_frame, w_frame = frame.shape[:2]
+        x, y = max(0, x), max(0, y)
+        x2, y2 = min(x + w, w_frame), min(y + h, h_frame)
+        cropped = frame[y:y2, x:x2]
+
+        if cropped.size == 0:
+            logger.warning(f"[FlowNet] Skipping empty crop for memory storage at frame {frame_index}")
+            return
+
+        success, buffer = cv2.imencode('.jpg', cropped)
+        if not success:
+            logger.warning(f"[FlowNet] Failed to encode crop at frame {frame_index}")
+            return
+
+        base64_crop = base64.b64encode(buffer).decode('utf-8')
+
+        framesGlobals.flowdetected_frames[frame_index] = {
+            "cropped_image": base64_crop,
+            "similarity": 0  # placeholder; update later if needed
+        }
+
+        logger.info(f"[FlowNet] Stored FlowNet detection in memory for UUID {self.uuid} at frame {frame_index}")
