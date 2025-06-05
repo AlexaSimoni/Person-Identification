@@ -15,3 +15,4 @@ FLOWNET_FOLDER = os.getenv("FLOWNET_FOLDER", join(ROOT_PATH, "FlowNet_Component"
 FLOWNET_MODEL_PATH = os.getenv("FLOWNET_MODEL_PATH", join(ROOT_PATH, "..", "FlowNet_Component", "checkpoints", "flownets_from_caffe.pth"))
 #USE_FLOWNETS = os.getenv("USE_FLOWNETS", "false").lower() == "true"
 USE_FLOWNETS = True
+ENABLE_CLIP_POST_FILTERING = True

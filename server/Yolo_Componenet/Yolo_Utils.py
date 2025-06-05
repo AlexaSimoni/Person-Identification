@@ -16,6 +16,9 @@ import queue
 from server.FlowNet_Component.FlowNet_Utils import start_flow_tracking, get_tracking_manager, draw_tracking_boxes
 #from server.Utils.framesGlobals import annotated_frames, detections_frames, all_even_frames, dir_path
 import server.Utils.framesGlobals as framesGlobals
+from server.FlowNet_Component.FlowNet_Utils import insert_flowdetected_frames
+#from server.FlowNet_Component.TrackingManager import tracking_manager
+
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -91,7 +94,10 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
     if not cap.isOpened():
         raise HTTPException(status_code=500, detail="Error opening video file")
     print_to_log_video_parameters(cap)
-    reference_embeddings = await embedding_manager.get_reference_embeddings(uuid)
+
+    #reference_embeddings = await embedding_manager.get_reference_embeddings(uuid)
+    reference_embeddings = {"data": await embedding_manager.get_reference_embeddings(uuid)}
+
     dir_temp=os.path.dirname(video_path)
     if not dir_temp or not os.path.isdir(dir_temp):
         raise HTTPException(status_code=500, detail="Invalid or missing directory path (dir_temp)")
@@ -130,6 +136,21 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
         ret, frame = cap.read()
         if not ret:
             break
+        if frame_index % 50 == 0:
+            logger.info(f"[yolo_utils] Refreshing reference embeddings at frame {frame_index}")
+            #reference_embeddings["data"] = await embedding_manager.get_reference_embeddings(uuid)
+            #new_data = await embedding_manager.get_reference_embeddings(uuid)
+            #logger.info(f"[yolo_utils] Refreshed embeddings count: {len(new_data.get('embeddings', []))}")
+            #reference_embeddings["data"] = new_data
+
+            # Process and save new FaceNet embeddings from detected frames
+            new_embeddings = await embedding_manager.process_detected_frames(uuid, face_embedding)
+            logger.info(f"[yolo_utils] New FaceNet embeddings added at frame {frame_index}: {len(new_embeddings)}")
+
+            # Reload latest reference embeddings from DB
+            new_data = await embedding_manager.get_reference_embeddings(uuid)
+            reference_embeddings["data"] = new_data
+            logger.info(f"[yolo_utils] Total reference embeddings now: {len(new_data.get('embeddings', []))}")
 
         frame_index += 1
         framesGlobals.all_even_frames[frame_index] = frame
@@ -172,6 +193,7 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
     #Save detected frames to MongoDB separately
     await insert_detected_frames_separately(uuid=uuid, running_id=running_id, detected_frames=detected_frames,
                                             frame_per_second=frame_per_second)
+    await insert_flowdetected_frames(uuid=uuid, running_id=running_id, frame_per_second=frame_per_second)
 
     #Re-encode the annotated video
     reencoded_output_path = video_path.replace(".mp4", "_annotated_reencoded.mp4")
@@ -235,13 +257,14 @@ def annotate_frame(frame, frame_obj, similarity_threshold, detected_frames, uuid
     #Annotate a frame with detected faces, compute similarity, and register FlowNet tracking
     logger.info(f"Found in frame {frame_obj.frame_index}: {len(frame_obj.detections)} detections")
     #Pair each detection with the reference embeddings
-    datas = [(reference_embeddings, detection.image_base_64) for detection in frame_obj.detections]
+    #datas = [(reference_embeddings, detection.image_base_64) for detection in frame_obj.detections]
+    datas = [(reference_embeddings.get("data"), detection.image_base_64) for detection in frame_obj.detections]
+
     similarities = [wrapper(data) for data in datas]
 
     for detection, similarity in zip(frame_obj.detections, similarities):
         if similarity is not None and similarity > similarity_threshold:
-
-            logger.info(f"Similarity score: {similarity:.2f}% for detection: {detection.frame_index}, Accepted")
+            #tracking_manager.try_save_initial_clip_reference(uuid, frame_index, box)
             x1, y1, x2, y2 = detection.coordinates
             framesGlobals.detections_frames[frame_index] = (detection.coordinates, similarity)
 
@@ -272,8 +295,15 @@ def annotate_frame(frame, frame_obj, similarity_threshold, detected_frames, uuid
 
             #Register FlowNet tracker
             box = (x1, y1, x2 - x1, y2 - y1)  # convert to (x, y, w, h)
+
+           # tracking_manager = get_tracking_manager()
+
             #tracker_manager.match_or_add(box, similarity, frame, uuid,SIMILARITY_THRESHOLD=similarity_threshold)
             tracker_manager.match_or_add(box, similarity, frame_index, uuid, SIMILARITY_THRESHOLD=similarity_threshold)
+            # Save initial CLIP reference from FaceNet detection (only once)
+
+            tracker_manager.try_save_initial_clip_reference(uuid, frame_index, box)
+            logger.info(f"Similarity score: {similarity:.2f}% for detection: {detection.frame_index}, Accepted")
 
             #Ensure FlowNet thread is running
             start_flow_tracking()

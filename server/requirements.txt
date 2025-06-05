@@ -33,3 +33,4 @@ scikit-learn~=1.5.0
 pydantic~=2.8.2
 ffmpeg-python~=0.2.0
 #git+https://github.com/ClementPinard/FlowNetPytorch.git
+transformers==4.41.2 # Added for CLIP
