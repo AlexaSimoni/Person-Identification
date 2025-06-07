@@ -3,16 +3,16 @@ import logging
 import cv2
 import time
 import base64
-from PIL import Image
-import io
-import asyncio
+#from PIL import Image
+#import io
+#import asyncio
 
 from server.Utils.framesGlobals import all_even_frames, detections_frames, dir_path, flow_clip_reference
 from server.FlowNet_Component.Cropper import Cropper
 from server.FlowNet_Component.clip_utils import (
     get_clip_embedding,
     compare_clip_embeddings,
-    add_clip_reference,
+    add_clip_reference, is_unique_against_recent_clip_refs,
 )
 from server.Utils.framesGlobals import flow_clip_reference
 from server.Utils import framesGlobals
@@ -30,7 +30,7 @@ class FlowTracker:
         self.frames_since_last_match = 0  # Counter for tracking without FaceNet
 
         logger.info(f"[FlowTracker] Using flow_net type: {type(self.flow_net).__name__}")
-
+    """
     def compute_iou(self, boxa, boxb):
         x_a = max(boxa[0], boxb[0])
         y_a = max(boxa[1], boxb[1])
@@ -43,7 +43,7 @@ class FlowTracker:
 
         iou = interarea / float(boxaarea + boxbarea - interarea + 1e-5)
         return iou
-
+    """
     def update_track_frame(self, current_frame_index):
         from server.FlowNet_Component import FlowNet_Utils
 
@@ -202,9 +202,9 @@ class FlowTracker:
         new_h = max(10, min(new_h, h_frame - y_new))
         x_new = max(0, min(x_new, w_frame - new_w))
         y_new = max(0, min(y_new, h_frame - new_h))
-        # Save debug crops
-        cv2.imwrite(f"flow_debug_prev_{self.uuid}.jpg", prev_crop)
-        cv2.imwrite(f"flow_debug_next_{self.uuid}.jpg", next_crop)
+        # Save debug crops for test
+        #cv2.imwrite(f"flow_debug_prev_{self.uuid}.jpg", prev_crop)
+        #cv2.imwrite(f"flow_debug_next_{self.uuid}.jpg", next_crop)
         logger.info(f"[FlowNet] Updated box → x={x_new}, y={y_new}, w={new_w}, h={new_h}, scale={scale_factor:.2f}")
         return x_new, y_new, new_w, new_h
 
@@ -238,12 +238,3 @@ class FlowTracker:
         logger.info(f"[FlowNet] Stored FlowNet detection in memory for UUID {self.uuid} at frame {frame_index}")
 
 
-def is_unique_against_recent_clip_refs(uuid: str, new_emb: np.ndarray, threshold: float = 0.05) -> bool:
-    refs = flow_clip_reference.get(uuid, {}).get("clip_embeddings", [])
-    recent_refs = refs[-3:]  # Only compare to last 3
-    for ref in recent_refs:
-        sim = compare_clip_embeddings(new_emb, ref)
-        if abs(sim - 1.0) < threshold:
-            logger.info(f"[CLIP] Skipping frame — too similar to recent (sim={sim:.4f})")
-            return False
-    return True

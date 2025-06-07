@@ -7,6 +7,7 @@ import cv2
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from server.FaceNet_Componenet.FaceNet_Utils import embedding_manager, face_embedding
+from server.FlowNet_Component.clip_utils import try_save_initial_clip_reference
 from server.Utils.db import detected_frames_collection, embedding_collection
 from server.Yolo_Componenet.YoloV8Detector import YoloV8Detector
 from server.config.config import FACENET_SERVER_URL, MONGODB_URL, SIMILARITY_THRESHOLD
@@ -302,7 +303,7 @@ def annotate_frame(frame, frame_obj, similarity_threshold, detected_frames, uuid
             tracker_manager.match_or_add(box, similarity, frame_index, uuid, SIMILARITY_THRESHOLD=similarity_threshold)
             # Save initial CLIP reference from FaceNet detection (only once)
 
-            tracker_manager.try_save_initial_clip_reference(uuid, frame_index, box)
+            try_save_initial_clip_reference(uuid, frame_index, box)
             logger.info(f"Similarity score: {similarity:.2f}% for detection: {detection.frame_index}, Accepted")
 
             #Ensure FlowNet thread is running

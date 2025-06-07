@@ -1,5 +1,5 @@
 import os
-import sys
+#import sys
 import torch
 import numpy as np
 import cv2
@@ -7,8 +7,8 @@ import logging
 
 from torchvision import transforms
 
-from server.Utils.helpers import ensure_dir_exists_if_needed
-from server.config.config import ROOT_PATH, FLOWNET_MODEL_PATH
+#from server.Utils.helpers import ensure_dir_exists_if_needed
+#from server.config.config import ROOT_PATH, FLOWNET_MODEL_PATH
 # Add FlowNetPytorch models directory to path
 """
 flow_component_path = os.path.join(ROOT_PATH, "server", "FlowNet_Component")
@@ -93,9 +93,9 @@ class FlowNetSWrapper:
                 cv2.imwrite(save_path, vis)
                 logger.info(f"[FlowNetSWrapper] Flow visualization saved at: {save_path}")
 
-                vis = self.visualize_flow(flow)
-                cv2.imwrite(save_path, vis)
-                logger.info(f"[FlowNetSWrapper] Successfully wrote to: {save_path}")
+                #vis = self.visualize_flow(flow)
+                #cv2.imwrite(save_path, vis)
+                #logger.info(f"[FlowNetSWrapper] Successfully wrote to: {save_path}")
         except Exception as e:
             logger.error(f"[FlowNetSWrapper] Failed to save flow visualization: {e}")
 
@@ -108,8 +108,9 @@ class FlowNetSWrapper:
         hsv[..., 1] = 255
         hsv[..., 2] = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX)
         return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
-
+    """
     def get_debug_dir_from_video(self, video_path: str) -> str:
         video_dir = os.path.dirname(video_path)
         debug_dir = os.path.join(video_dir, "flow_vis")
         return debug_dir
+    """
