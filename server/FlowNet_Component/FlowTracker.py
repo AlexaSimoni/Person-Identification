@@ -9,9 +9,10 @@ from server.FlowNet_Component.Cropper import Cropper
 from server.FlowNet_Component.clip_utils import (
     get_clip_embedding,
     compare_clip_embeddings,
-    add_clip_reference, is_unique_against_recent_clip_refs,
+    add_clip_reference, is_unique_against_recent_clip_refs
 )
 from server.Utils import framesGlobals
+from server.config.config import USE_CLIP_IN_FLOWTRACKING
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class FlowTracker:
         self.last_box = None  # Last known box (x, y, w, h)
         self.best_score = 0.0  # Best similarity score from FaceNet
         self.frames_since_last_match = 0  # Counter for tracking without FaceNet
+        self.use_clip = USE_CLIP_IN_FLOWTRACKING  # Flag from config.py
         logger.info(f"[FlowTracker] Using flow_net type: {type(self.flow_net).__name__}")
     """
     def compute_iou(self, boxa, boxb):
@@ -90,38 +92,44 @@ class FlowTracker:
 
             # Extract image crop from updated box
             x, y, w, h = updated_box
-            curr_frame = all_even_frames[current_frame_index]
-            crop = curr_frame[y:y + h, x:x + w]
-            clip_emb = get_clip_embedding(crop)
-            if clip_emb is None:
-                logger.warning(f"[FlowNet] Failed to extract CLIP embedding at frame {current_frame_index}")
-                return self.last_box
+            if self.use_clip:
+            # Extract crop and compute CLIP embedding
+                curr_frame = all_even_frames[current_frame_index]
+                crop = curr_frame[y:y + h, x:x + w]
+                clip_emb = get_clip_embedding(crop)
+                if clip_emb is None:
+                    logger.warning(f"[FlowNet] Failed to extract CLIP embedding at frame {current_frame_index}")
+                    return self.last_box
 
-            # Compare new embedding to existing CLIP reference embeddings
-            refs = flow_clip_reference.get(self.uuid, {}).get("clip_embeddings", [])
-            similarities = [compare_clip_embeddings(clip_emb, ref) for ref in refs]
-            max_similarity = max(similarities, default=0.0)
-            logger.info(
-                f"[CLIP] Similarity to reference for UUID {self.uuid} at frame {current_frame_index}: {max_similarity:.2f}")
+                # Compare new embedding to existing CLIP reference embeddings
+                refs = flow_clip_reference.get(self.uuid, {}).get("clip_embeddings", [])
+                similarities = [compare_clip_embeddings(clip_emb, ref) for ref in refs]
+                max_similarity = max(similarities, default=0.0)
+                logger.info(f"[CLIP] Similarity to reference for UUID {self.uuid} at frame {current_frame_index}: {max_similarity:.2f}")
 
-            # similarity = get_best_clip_similarity(self.uuid, clip_emb)
-            # logger.info(
-            #   f"[CLIP] Similarity to reference for UUID {self.uuid} at frame {current_frame_index}: {similarity:.2f}")
-            # Check if appearance is valid for storage
+                # similarity = get_best_clip_similarity(self.uuid, clip_emb)
+                # logger.info(
+                #   f"[CLIP] Similarity to reference for UUID {self.uuid} at frame {current_frame_index}: {similarity:.2f}")
+                # Check if appearance is valid for storage
 
-            # If similar enough and unique, store this detection
-            if max_similarity >= CLIP_STORE_THRESHOLD:
-                if is_unique_against_recent_clip_refs(self.uuid, clip_emb, threshold=0.05):
-                    #self.store_flow_detection(curr_frame, updated_box, current_frame_index)
-                    self.store_flow_detection(current_frame_index, updated_box)
-                    logger.info(f"[FlowNet] Stored unique flow detection with sim={max_similarity:.2f}")
-                else:
-                    logger.info(f"[FlowNet] Rejected — not unique against recent crops (sim={max_similarity:.2f})")
+                # If similar enough and unique, store this detection
+                if max_similarity >= CLIP_STORE_THRESHOLD:
+                    if is_unique_against_recent_clip_refs(self.uuid, clip_emb, threshold=0.05):
+                        #self.store_flow_detection(curr_frame, updated_box, current_frame_index)
+                        self.store_flow_detection(current_frame_index, updated_box)
+                        logger.info(f"[FlowNet] Stored unique flow detection with sim={max_similarity:.2f}")
+                    else:
+                        logger.info(f"[FlowNet] Rejected — not unique against recent crops (sim={max_similarity:.2f})")
 
-            # Update CLIP reference memory if similarity is high
-            if max_similarity >= CLIP_UPDATE_THRESHOLD:
-                add_clip_reference(self.uuid, clip_emb, similarity=max_similarity)
-                logger.info(f"[CLIP] Updated reference list for UUID {self.uuid} (new sim={max_similarity:.2f})")
+                # Update CLIP reference memory if similarity is high
+                if max_similarity >= CLIP_UPDATE_THRESHOLD:
+                    add_clip_reference(self.uuid, clip_emb, similarity=max_similarity)
+                    logger.info(f"[CLIP] Updated reference list for UUID {self.uuid} (new sim={max_similarity:.2f})")
+
+            else:
+                # Skip CLIP logic, store directly
+                self.store_flow_detection(current_frame_index, updated_box)
+                logger.info(f"[FlowNet] Stored flow detection without CLIP filtering (CLIP disabled)")
 
         return self.last_box
 

@@ -4,7 +4,7 @@ from typing import Tuple
 
 class Cropper:
     @staticmethod
-    def crop_with_margin(frame: np.ndarray, bbox: Tuple[int, int, int, int], margin_ratio: float = 1.0) -> Tuple[np.ndarray, Tuple[int, int]]:
+    def crop_with_margin(frame: np.ndarray, bbox: Tuple[int, int, int, int], margin_ratio: float) -> Tuple[np.ndarray, Tuple[int, int]]:
         #Crop a region around the bounding box with added margin from a full BGR frame
         #Ensures output stays within the image boundaries
         #frame: Full image (BGR)

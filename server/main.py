@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 from contextlib import asynccontextmanager
 import uvicorn
@@ -12,8 +13,9 @@ from server.Yolo_Componenet.Yolo_Utils import process_and_annotate_video, create
     fetch_detected_frames
 from server.FlowNet_Component.FlowNet_Utils import logger as flow_logger
 from server.FaceNet_Componenet.FaceNet_Utils import embedding_manager, face_embedding
-from server.config.config import YOLO_SERVER_PORT, SIMILARITY_THRESHOLD
-from server.Utils.db import check_mongo, delete_many_detected_frames_collection
+from server.config.config import YOLO_SERVER_PORT, SIMILARITY_THRESHOLD, CLEAR_UUID_HISTORY_BEFORE_RUN, \
+    CLEAR_ALL_HISTORY_BEFORE_RUN
+from server.Utils.db import check_mongo, delete_many_detected_frames_collection, clear_all_user_data, clear_all_data
 from fastapi.middleware.cors import CORSMiddleware
 import torch
 from fastapi import UploadFile, Form
@@ -31,6 +33,9 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up...")
     yolo_logger.info("Starting up...")
     flow_logger.info("Starting up...")
+    if CLEAR_ALL_HISTORY_BEFORE_RUN:
+        await clear_all_data()
+
     yield
     logger.info("Shutting down...")
     yolo_logger.info("Shutting down...")
@@ -99,6 +104,10 @@ async def set_reference_image(
     #Set the reference images for face comparison , calculate the embeddings, and save them to the database
     #Returns the number of embeddings saved
     try:
+        #Clear if enabled
+        if CLEAR_UUID_HISTORY_BEFORE_RUN:
+            deleted= await clear_all_user_data(uuid)
+            logger.info(f"Cleared UUID data before upload: {deleted}")
         #Process images from files
         file_embeddings = await embedding_manager.process_images(files, face_embedding)
 
@@ -184,12 +193,27 @@ async def health_check_flownet():
 async def purge_detected_frames():
     #Purge the detected frames collection
     try:
-        delete_many_detected_frames_collection()
+        #delete_many_detected_frames_collection()
+        count = await delete_many_detected_frames_collection({})
+        logger.info(f"Purged {count} detected frame items")
         return JSONResponse(content={"message": "Detected frames collection purged successfully."}, status_code=200)
     except Exception as e:
         yolo_logger.error(f"Error purging detected frames collection: {e}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
+"""
+if CLEAR_ALL_HISTORY_BEFORE_RUN:
+    @app.delete("/clear_all_users/", description="Purge ALL DB data (frames & embeddings)")
+    async def clear_everything():
+        try:
+            deleted = await clear_all_data()
+            logger.info(f"Globally cleared: {deleted}")
+            return JSONResponse(status_code=200, content={"message": "All data cleared successfully"})
+        except Exception as e:
+            logger.error(f"Error clearing all DB data: {e}")
+            return JSONResponse(status_code=500, content={"error": str(e)})
 
+"""
 if __name__ == "__main__":
     #Start the FastAPI application
     uvicorn.run(app, host="0.0.0.0", port=YOLO_SERVER_PORT)  # Adjust the port as needed
+

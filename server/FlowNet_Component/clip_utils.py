@@ -68,7 +68,7 @@ def get_clip_reference(uuid: str):
 # Check if unique to prevent saving nearly identical crops
 # Input: UUID string, new CLIP embedding, similarity threshold (default 0.05)
 # Output: True - new embedding is visually different enough from recent ones, False - otherwise
-def is_unique_against_recent_clip_refs(uuid: str, new_emb: np.ndarray, threshold: float = 0.05) -> bool:
+def is_unique_against_recent_clip_refs(uuid: str, new_emb: np.ndarray, threshold: float) -> bool:
     refs = flow_clip_reference.get(uuid, {}).get("clip_embeddings", [])
     recent_refs = refs[-3:]  # Only compare to last 3 saved references
     for ref in recent_refs:

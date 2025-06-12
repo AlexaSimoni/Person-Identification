@@ -13,6 +13,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from server.Utils.db import embedding_collection
 import torch
 from server.Utils.db import detected_frames_collection
+from server.config.config import SIMILARITY_THRESHOLD
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -104,7 +105,9 @@ class EmbeddingManager:
         #Process detected frames and calculate embeddings for frames with similarity
         #greater than 80% and not embedded
         cursor = detected_frames_collection.find(
-            {"uuid": uuid, "embedded": False, "frame_data.similarity": {"$gt": 80}})    #similarity rate
+        {"uuid": uuid, "embedded": False, "frame_data.similarity": {"$gt": 80}})    #similarity rate
+        #{"uuid": uuid, "embedded": False, "frame_data.similarity": {"$gt": SIMILARITY_THRESHOLD}})    #similarity rate
+
         new_embeddings = []
         existing_embeddings = await self.get_existing_embeddings(uuid)
         async for doc in cursor:

@@ -9,11 +9,18 @@ import numpy as np
 from typing import Union
 from server.FlowNet_Component.TrackingManager import TrackingManager
 from server.Utils.framesGlobals import all_even_frames, flowdetected_frames
-from server.config.config import USE_FLOWNETS, SIMILARITY_THRESHOLD
+from server.config.config import USE_FLOWNETS, SIMILARITY_THRESHOLD, USE_CLIP_IN_FLOWTRACKING
 from server.FaceNet_Componenet.FaceNet_Utils import face_embedding, embedding_manager
-from server.FlowNet_Component.clip_utils import get_clip_embedding, compare_clip_embeddings, add_clip_reference, get_clip_reference
+#from server.FlowNet_Component.clip_utils import get_clip_embedding, compare_clip_embeddings, add_clip_reference, get_clip_reference
 from server.Utils.db import detected_frames_collection
-
+if USE_CLIP_IN_FLOWTRACKING:
+    from server.FlowNet_Component.clip_utils import (
+        get_clip_embedding,
+        compare_clip_embeddings,
+        add_clip_reference,
+        get_clip_reference,
+        is_unique_against_recent_clip_refs
+    )
 logger = logging.getLogger(__name__)
 logger.info(f"Using {'FlowNetS' if USE_FLOWNETS else 'SimpleFlowNet (Farneback)'} for optical flow.")
 
@@ -25,6 +32,7 @@ logger.info(f"Using {'FlowNetS' if USE_FLOWNETS else 'SimpleFlowNet (Farneback)'
 flow_tracking_started = False
 flow_tracking_lock = threading.Lock()
 tracking_manager = TrackingManager()
+
 
 # Start the background FlowNet tracking loop once
 def start_flow_tracking():
@@ -88,8 +96,9 @@ def draw_tracking_boxes(frame, frame_index):
 # Inserts FlowNet-tracked frames into MongoDB with FaceNet and CLIP filtering
 # Inputs: uuid (person id), running_id (session id of current video run), frame_per_second
 # Output: None (inserts filtered frames and optionally new embeddings into the database)
-async def insert_flowdetected_frames(uuid: str, running_id: str, frame_per_second: int = 30):
-    from server.FlowNet_Component.FlowTracker import is_unique_against_recent_clip_refs
+async def insert_flow_detected_frames(uuid: str, running_id: str, frame_per_second: int = 30):
+    #if USE_CLIP_IN_FLOWTRACKING:
+        #from server.FlowNet_Component.FlowTracker import is_unique_against_recent_clip_refs
 
     inserted_count = 0
     unique_embeddings = []
@@ -128,44 +137,55 @@ async def insert_flowdetected_frames(uuid: str, running_id: str, frame_per_secon
             similarity = compute_similarity(reference_record, base64_crop)
 
         # If FaceNet fails or similarity is low, run CLIP fallback
+        #if embedding is None or similarity < SIMILARITY_THRESHOLD:
+
+        # If FaceNet fails or similarity is low, optionally run CLIP fallback
         if embedding is None or similarity < SIMILARITY_THRESHOLD:
-            clip_emb = get_clip_embedding(np.array(image.convert("RGB")))
-            if clip_emb is None or not clip_emb.any():
-                logger.warning(f"[FlowNet] No CLIP embedding for frame {frame_index}")
-                continue
+            if USE_CLIP_IN_FLOWTRACKING:
 
-            # Compare to existing CLIP references
-            ref_embs = get_clip_reference(uuid)
-            similarities = [compare_clip_embeddings(clip_emb, ref) for ref in ref_embs]
-            max_sim = max(similarities, default=0.0)
-            logger.info(f"[CLIP] Similarity to reference for UUID {uuid} at frame {frame_index}: {max_sim:.2f}")
-            # If below minimum similarity, reject the frame
-            if max_sim < CLIP_SIMILARITY_THRESHOLD:
-                logger.warning(f"[FlowNet] CLIP fallback failed — skipping frame {frame_index}")
-                continue
-            # If high similarity, update CLIP references
-            if max_sim >= CLIP_UPDATE_THRESHOLD:
-                add_clip_reference(uuid, clip_emb, similarity=max_sim)
-                logger.info(f"[CLIP] Updated CLIP references for UUID {uuid} with sim={max_sim:.2f}")
-            # Prevent saving near-duplicate CLIP embeddings
-            if not is_unique_against_recent_clip_refs(uuid, clip_emb, threshold=0.05):
-                logger.info(f"[FlowNet] CLIP fallback duplicate — skipping frame {frame_index}")
-                continue
+                clip_emb = get_clip_embedding(np.array(image.convert("RGB")))
+                if clip_emb is None or not clip_emb.any():
+                    logger.warning(f"[FlowNet] No CLIP embedding for frame {frame_index}")
+                    continue
 
-            logger.info(f"[FlowNet] CLIP verified and unique — accepting fallback frame {frame_index}")
+                # Compare to existing CLIP references
+                ref_embs = get_clip_reference(uuid)
+                similarities = [compare_clip_embeddings(clip_emb, ref) for ref in ref_embs]
+                max_sim = max(similarities, default=0.0)
+                logger.info(f"[CLIP] Similarity to reference for UUID {uuid} at frame {frame_index}: {max_sim:.2f}")
+                # If below minimum similarity, reject the frame
+                if max_sim < CLIP_SIMILARITY_THRESHOLD:
+                    logger.warning(f"[FlowNet] CLIP fallback failed — skipping frame {frame_index}")
+                    continue
+                # If high similarity, update CLIP references
+                if max_sim >= CLIP_UPDATE_THRESHOLD:
+                    add_clip_reference(uuid, clip_emb, similarity=max_sim)
+                    logger.info(f"[CLIP] Updated CLIP references for UUID {uuid} with sim={max_sim:.2f}")
+                # Prevent saving near-duplicate CLIP embeddings
+                if not is_unique_against_recent_clip_refs(uuid, clip_emb, threshold=0.05):
+                    logger.info(f"[FlowNet] CLIP fallback duplicate — skipping frame {frame_index}")
+                    continue
 
-            """
-            if not clip_filter_passes(uuid, image, threshold=CLIP_SIMILARITY_THRESHOLD):
-                logger.warning(f"[FlowNet] CLIP fallback failed — skipping frame {frame_index}")
-                continue
+                logger.info(f"[FlowNet] CLIP verified and unique — accepting fallback frame {frame_index}")
+
+                """
+                if not clip_filter_passes(uuid, image, threshold=CLIP_SIMILARITY_THRESHOLD):
+                    logger.warning(f"[FlowNet] CLIP fallback failed — skipping frame {frame_index}")
+                    continue
+                else:
+                    logger.info(f"[FlowNet] CLIP verified — allowing fallback frame {frame_index}")
+                """
             else:
-                logger.info(f"[FlowNet] CLIP verified — allowing fallback frame {frame_index}")
-            """
+                # CLIP disabled and FaceNet similarity too low — skip frame
+                logger.warning(f"[FlowNet] Frame {frame_index} below FaceNet threshold and CLIP disabled — skipping")
+                continue
 
         # If FaceNet embedding exists, check if it's unique
         if embedding is not None:
             embedded = True
-            is_unique = await is_unique_flownet_embedding(uuid, embedding)
+            #is_unique = await is_unique_flownet_embedding(uuid, embedding)
+            is_unique = await is_unique_flownet_embedding(reference_record, embedding)
+
             if is_unique:
                 logger.info(f"[FlowNet] Frame {frame_index} embedding is UNIQUE")
                 unique_embeddings.append(embedding)
@@ -258,7 +278,7 @@ async def is_unique_flownet_embedding(uuid: str, new_embedding: np.ndarray, thre
     # inputs: reference_record (dict from DB with stored embeddings for this person),
     #       new_embedding (FaceNet embedding), threshold (max cosine similarity for unique)
     # output: True - unique, False - otherwise
-async def is_unique_flownet_embedding(reference_record: dict, new_embedding: np.ndarray, threshold: float = 0.2) -> bool:
+async def is_unique_flownet_embedding(reference_record: dict, new_embedding: np.ndarray, threshold: float = 0.02) -> bool:
     # If no stored embeddings - treat as unique
     if not reference_record or "embeddings" not in reference_record:
         return True

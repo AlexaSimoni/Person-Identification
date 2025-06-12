@@ -2,7 +2,7 @@ import logging
 from server.FlowNet_Component.FlowTracker import FlowTracker
 from server.FlowNet_Component.SimpleFlowNet import SimpleFlowNet
 from server.FlowNet_Component.FlowNetSWrapper import FlowNetSWrapper
-from server.config.config import USE_FLOWNETS, FLOWNET_MODEL_PATH
+from server.config.config import USE_FLOWNETS, FLOWNET_MODEL_PATH, FLOWNET_MATCH_FROM_FACENET_EVERY_TIME
 from server.FlowNet_Component.clip_utils import try_save_initial_clip_reference, save_clip_reference_on_low_similarity
 
 logger = logging.getLogger(__name__)
@@ -31,30 +31,38 @@ class TrackingManager:
     def match_or_add(self, box, similarity, frame_index, uuid, SIMILARITY_THRESHOLD):
         # Create tracker if it doesn’t exist
         if uuid not in self.trackers:
-            self.trackers[uuid] = FlowTracker(flow_net=self.flow_net, uuid=uuid)
+            self.trackers[uuid] = FlowTracker(
+                flow_net=self.flow_net,
+                uuid=uuid,
+                #use_clip=USE_CLIP_IN_FLOWTRACKING  # Pass CLIP toggle to tracker
+            )
             logger.info(f"[FlowNet] Tracker created for UUID {uuid}")
         tracker = self.trackers[uuid]
         # Only initialize ONCE from FaceNet
        # if tracker.last_box is None and similarity >= SIMILARITY_THRESHOLD:
         # Update tracker only if similarity is above threshold
         if similarity >= SIMILARITY_THRESHOLD:
-            tracker.last_box = box
-            tracker.initial_facenet_box = box
-            tracker.last_frame_index =frame_index
-            tracker.frames_since_last_match = 0
+            if FLOWNET_MATCH_FROM_FACENET_EVERY_TIME or tracker.last_frame_index is None:
+                tracker.last_box = box
+                tracker.initial_facenet_box = box
+                tracker.last_frame_index = frame_index
+                tracker.frames_since_last_match = 0
 
-            # Save best match score
-            if similarity > tracker.best_score:
-               tracker.best_score = similarity
-            logger.info(
-                f"[FlowNet] Initialized tracker for UUID {uuid} at frame {tracker.last_frame_index} | sim: {similarity:.2f}%")
-            # Save CLIP reference from FaceNet crop
-            try_save_initial_clip_reference(uuid, frame_index, box)
+                # Save best match score
+                if similarity > tracker.best_score:
+                    tracker.best_score = similarity
+                logger.info(
+                    f"[FlowNet] Initialized tracker for UUID {uuid} at frame {tracker.last_frame_index} | sim: {similarity:.2f}%")
+
+                # Save initial CLIP from FaceNet if enabled
+                if tracker.use_clip:
+                    try_save_initial_clip_reference(uuid, frame_index, box)
 
         # Optional debug: prevent further updates
         else:
-            # Similarity too low — fallback logic: try saving for later CLIP reference
-            save_clip_reference_on_low_similarity(uuid, frame_index, box, similarity)
+            # If similarity is too low and CLIP is enabled, try to save fallback
+            if tracker.use_clip:
+                save_clip_reference_on_low_similarity(uuid, frame_index, box, similarity)
 
     # Updates all FlowTrackers using optical flow for a new frame
     # Inputs: frame_index (current)

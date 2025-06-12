@@ -6,21 +6,33 @@ import ffmpeg
 import cv2
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
+from torch.fx.experimental.graph_gradual_typechecker import all_eq
+
 from server.FaceNet_Componenet.FaceNet_Utils import embedding_manager, face_embedding
-from server.FlowNet_Component.clip_utils import try_save_initial_clip_reference
 from server.Utils.db import detected_frames_collection, embedding_collection
+from server.Utils.framesGlobals import all_even_frames
 from server.Yolo_Componenet.YoloV8Detector import YoloV8Detector
 from server.config.config import FACENET_SERVER_URL, MONGODB_URL, SIMILARITY_THRESHOLD
+from server.config.config import USE_CLIP_IN_FLOWTRACKING, ENABLE_FLOWNET_TRACKING
 from motor.motor_asyncio import AsyncIOMotorClient
 import threading
 import queue
-from server.FlowNet_Component.FlowNet_Utils import start_flow_tracking, get_tracking_manager, draw_tracking_boxes
+from server.FlowNet_Component.FlowNet_Utils import start_flow_tracking, get_tracking_manager, draw_tracking_boxes, insert_flow_detected_frames
 #from server.Utils.framesGlobals import annotated_frames, detections_frames, all_even_frames, dir_path
 import server.Utils.framesGlobals as framesGlobals
-from server.FlowNet_Component.FlowNet_Utils import insert_flowdetected_frames
 #from server.FlowNet_Component.TrackingManager import tracking_manager
-
-
+if USE_CLIP_IN_FLOWTRACKING:
+    from server.FlowNet_Component.clip_utils import try_save_initial_clip_reference
+if ENABLE_FLOWNET_TRACKING:
+    from server.FlowNet_Component.FlowNet_Utils import (
+        start_flow_tracking,
+        get_tracking_manager,
+        draw_tracking_boxes,
+        insert_flow_detected_frames,
+    )
+    tracker_manager = get_tracking_manager()
+else:
+    tracker_manager = None
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,7 +40,7 @@ logger = logging.getLogger(__name__)
 detector = YoloV8Detector("../yolov8l.pt", logger)
 face_comparison_server_url = FACENET_SERVER_URL + "/compare/"
 client = AsyncIOMotorClient(MONGODB_URL)
-tracker_manager = get_tracking_manager()
+#tracker_manager = get_tracking_manager()
 
 #List to store processed frames and their indices
 """
@@ -63,30 +75,46 @@ async def insert_detected_frames_separately(uuid: str, running_id: str, detected
 
 def annotate_frame_worker(similarity_threshold, detected_frames, uuid, reference_embeddings):
     #Worker function to annotate frames with detected faces
+    frame_index=None
     while True:
         try:
             item = frame_queue.get()
+            #item_flow=all_even_frames.get()
             if item is None:
                 break
 
             frame, frame_obj, frame_index = item
-            #Annotate the frame
-            logger.info(f"Annotating frame {frame_obj.frame_index}")
-            annotate_frame(frame, frame_obj, similarity_threshold, detected_frames, uuid,
+            #frame_flow, frame_index_flow = item_flow
+            if frame_index % 2 == 0:
+
+                #Annotate the frame
+                logger.info(f"Annotating frame {frame_obj.frame_index}")
+                annotate_frame(frame, frame_obj, similarity_threshold, detected_frames, uuid,
                            reference_embeddings, frame_index)
+
+                # Safely store the annotated frame in the shared dictionary
+                framesGlobals.annotated_frames[frame_index] = frame
             #added for flownet bbox
             #if frame_index % 2 == 0:
-            #    draw_tracking_boxes(frame, frame_index)
-            draw_tracking_boxes(frame, frame_index)
+            #draw_tracking_boxes(frame, frame_index)
 
-            # Safely store the annotated frame in the shared dictionary
-            framesGlobals.annotated_frames[frame_index] = frame
+            if ENABLE_FLOWNET_TRACKING:
+                #draw_tracking_boxes(frame_flow, frame_index_flow)
+                #draw_tracking_boxes(frame, frame_index)
+                frame_with_boxes = frame.copy()
+                draw_tracking_boxes(frame_with_boxes, frame_index)
+                framesGlobals.annotated_frames[frame_index] = frame_with_boxes
+            else:
+                framesGlobals.annotated_frames[frame_index] = frame
+
+
 
         except Exception as e:
             logger.error(f"Error in annotate_frame_worker: {e}")
 
         finally:
-            logger.info(f"Finished processing frame {frame_index}, marking as done")
+            if frame_index:
+                logger.info(f"Finished processing frame {frame_index}, marking as done")
             frame_queue.task_done()
 
 async def process_and_annotate_video(video_path: str, similarity_threshold: float, uuid: str, running_id: str) -> str:
@@ -132,7 +160,8 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
                              args=(similarity_threshold, detected_frames, uuid, reference_embeddings))
         t.start()
         threads.append(t)
-
+    previous_frame=None
+    previous_frame_index=None
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
@@ -153,9 +182,10 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
             reference_embeddings["data"] = new_data
             logger.info(f"[yolo_utils] Total reference embeddings now: {len(new_data.get('embeddings', []))}")
 
-        frame_index += 1
-        framesGlobals.all_even_frames[frame_index] = frame
-
+        if ENABLE_FLOWNET_TRACKING:
+            framesGlobals.all_even_frames[frame_index] = frame
+            #draw_tracking_boxes(frame, frame_index)
+        """
         #Queue even frames for annotation processing
         if frame_index % 2 == 0:
             #Directly add even frames for flownet use
@@ -164,11 +194,33 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
             frame_obj = detector.predict(frame, frame_index=frame_index)
             #Queue the frame for annotation
             frame_queue.put((frame, frame_obj, frame_index))
-
             logger.info(f"Processing frame {frame_index}/{total_frames}")
-        else:
-            #Directly add odd frames to the annotated_frames dictionary
+        """
+        frame_obj=None
+        if frame_index % 2 == 0:
+            frame_obj = detector.predict(frame, frame_index=frame_index)
+
+        #frame_queue.put((frame, frame_obj, frame_index))
+        frame_queue.put((frame, frame_obj, frame_index))
+        """
+        # Delay FlowNet update and box drawing to happen AFTER previous detection
+        if ENABLE_FLOWNET_TRACKING and previous_frame is not None:
+                tracker = tracker_manager.trackers.get(uuid)
+                if tracker is not None:
+                    tracker.update_track_frame( previous_frame_index)
+                    #draw_tracking_boxes(previous_frame, previous_frame_index)
+
+        # Save current frame for next round
+        previous_frame = frame
+        previous_frame_index = frame_index
+        """
+        logger.info(f"Processing frame {frame_index}/{total_frames}")
+        if frame_index % 2 == 1:
+             #Directly add odd frames to the annotated_frames dictionary
             framesGlobals.annotated_frames[frame_index] = frame
+
+
+        frame_index += 1
 
     #Wait for all frames to be processed
     frame_queue.join()
@@ -183,9 +235,10 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
     #Write the frames to output video
     for index in range(total_frames):
         frame = framesGlobals.annotated_frames.get(index)
+
         if frame is not None:
-            #if index % 2 == 1:
-                #check_and_annotate(index, frame)
+            if index % 2 == 1:
+                check_and_annotate(index, frame)
             out.write(frame)
 
     cap.release()
@@ -194,7 +247,8 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
     #Save detected frames to MongoDB separately
     await insert_detected_frames_separately(uuid=uuid, running_id=running_id, detected_frames=detected_frames,
                                             frame_per_second=frame_per_second)
-    await insert_flowdetected_frames(uuid=uuid, running_id=running_id, frame_per_second=frame_per_second)
+    if ENABLE_FLOWNET_TRACKING:
+        await insert_flow_detected_frames(uuid=uuid, running_id=running_id, frame_per_second=frame_per_second)
 
     #Re-encode the annotated video
     reencoded_output_path = video_path.replace(".mp4", "_annotated_reencoded.mp4")
@@ -300,14 +354,17 @@ def annotate_frame(frame, frame_obj, similarity_threshold, detected_frames, uuid
            # tracking_manager = get_tracking_manager()
 
             #tracker_manager.match_or_add(box, similarity, frame, uuid,SIMILARITY_THRESHOLD=similarity_threshold)
-            tracker_manager.match_or_add(box, similarity, frame_index, uuid, SIMILARITY_THRESHOLD=similarity_threshold)
-            # Save initial CLIP reference from FaceNet detection (only once)
 
-            try_save_initial_clip_reference(uuid, frame_index, box)
-            logger.info(f"Similarity score: {similarity:.2f}% for detection: {detection.frame_index}, Accepted")
+            if ENABLE_FLOWNET_TRACKING:
+                tracker_manager.match_or_add(box, similarity, frame_index, uuid,
+                                             SIMILARITY_THRESHOLD=similarity_threshold)
+                if USE_CLIP_IN_FLOWTRACKING:
+                    # Save initial CLIP reference from FaceNet detection (only once)
+                    try_save_initial_clip_reference(uuid, frame_index, box)
+                    logger.info(f"Similarity score: {similarity:.2f}% for detection: {detection.frame_index}, Accepted")
 
-            #Ensure FlowNet thread is running
-            start_flow_tracking()
+                # Ensure FlowNet thread is running
+                start_flow_tracking()
 
             detection.similarity = similarity
             detection.founded = True
