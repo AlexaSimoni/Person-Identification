@@ -168,13 +168,6 @@ async def insert_flow_detected_frames(uuid: str, running_id: str, frame_per_seco
 
                 logger.info(f"[FlowNet] CLIP verified and unique — accepting fallback frame {frame_index}")
 
-                """
-                if not clip_filter_passes(uuid, image, threshold=CLIP_SIMILARITY_THRESHOLD):
-                    logger.warning(f"[FlowNet] CLIP fallback failed — skipping frame {frame_index}")
-                    continue
-                else:
-                    logger.info(f"[FlowNet] CLIP verified — allowing fallback frame {frame_index}")
-                """
             else:
                 # CLIP disabled and FaceNet similarity too low — skip frame
                 logger.warning(f"[FlowNet] Frame {frame_index} below FaceNet threshold and CLIP disabled — skipping")
@@ -258,22 +251,7 @@ def build_flownet_document(uuid: str, running_id: str, frame_index: int, base64_
         "frame_per_second": fps,
         "source": "flownet"
     }
-"""
-# Checks if the new FaceNet embedding is unique enough to store
-# inputs: uuid (person id), new_embedding (np.ndarray), threshold (float cosine distance)
-# output: True if unique, False otherwise
-async def is_unique_flownet_embedding(uuid: str, new_embedding: np.ndarray, threshold: float = 0.2) -> bool:
-    # Retrieve the stored reference embeddings from the database for the given person UUID
-    reference_record = await embedding_manager.get_reference_embeddings(uuid)
-    if not reference_record or "embeddings" not in reference_record:
-        return True  # No reference embeddings -> unique
 
-    # Convert each stored embedding from the reference record into a NumPy array for comparison
-    existing_embeddings = [np.array(e) for e in reference_record.get("embeddings", [])]
-    # Check if the new embedding is different enough from existing ones
-    return embedding_manager.is_unique_embedding(new_embedding, existing_embeddings, threshold)
-
-"""
     # Checks if the new FaceNet embedding is unique enough to store
     # inputs: reference_record (dict from DB with stored embeddings for this person),
     #       new_embedding (FaceNet embedding), threshold (max cosine similarity for unique)

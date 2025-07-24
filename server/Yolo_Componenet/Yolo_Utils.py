@@ -7,10 +7,8 @@ import cv2
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from torch.fx.experimental.graph_gradual_typechecker import all_eq
-
 from server.FaceNet_Componenet.FaceNet_Utils import embedding_manager, face_embedding
 from server.Utils.db import detected_frames_collection, embedding_collection
-from server.Utils.framesGlobals import all_even_frames
 from server.Yolo_Componenet.YoloV8Detector import YoloV8Detector
 from server.config.config import FACENET_SERVER_URL, MONGODB_URL, SIMILARITY_THRESHOLD
 from server.config.config import USE_CLIP_IN_FLOWTRACKING, ENABLE_FLOWNET_TRACKING
@@ -57,7 +55,6 @@ frame_queue = queue.Queue()
 framesGlobals.all_even_frames.clear()
 framesGlobals.detections_frames.clear()
 framesGlobals.annotated_frames.clear()
-#dir_path.clear()
 
 async def insert_detected_frames_separately(uuid: str, running_id: str, detected_frames: Dict[str, Any],
                                             frame_per_second: int = 30):
@@ -79,12 +76,10 @@ def annotate_frame_worker(similarity_threshold, detected_frames, uuid, reference
     while True:
         try:
             item = frame_queue.get()
-            #item_flow=all_even_frames.get()
             if item is None:
                 break
 
             frame, frame_obj, frame_index = item
-            #frame_flow, frame_index_flow = item_flow
             if frame_index % 2 == 0:
 
                 #Annotate the frame
@@ -94,20 +89,13 @@ def annotate_frame_worker(similarity_threshold, detected_frames, uuid, reference
 
                 # Safely store the annotated frame in the shared dictionary
                 framesGlobals.annotated_frames[frame_index] = frame
-            #added for flownet bbox
-            #if frame_index % 2 == 0:
-            #draw_tracking_boxes(frame, frame_index)
 
             if ENABLE_FLOWNET_TRACKING:
-                #draw_tracking_boxes(frame_flow, frame_index_flow)
-                #draw_tracking_boxes(frame, frame_index)
                 frame_with_boxes = frame.copy()
                 draw_tracking_boxes(frame_with_boxes, frame_index)
                 framesGlobals.annotated_frames[frame_index] = frame_with_boxes
             else:
                 framesGlobals.annotated_frames[frame_index] = frame
-
-
 
         except Exception as e:
             logger.error(f"Error in annotate_frame_worker: {e}")
@@ -160,18 +148,13 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
                              args=(similarity_threshold, detected_frames, uuid, reference_embeddings))
         t.start()
         threads.append(t)
-    previous_frame=None
-    previous_frame_index=None
+
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
         if frame_index % 50 == 0:
             logger.info(f"[yolo_utils] Refreshing reference embeddings at frame {frame_index}")
-            #reference_embeddings["data"] = await embedding_manager.get_reference_embeddings(uuid)
-            #new_data = await embedding_manager.get_reference_embeddings(uuid)
-            #logger.info(f"[yolo_utils] Refreshed embeddings count: {len(new_data.get('embeddings', []))}")
-            #reference_embeddings["data"] = new_data
 
             # Process and save new FaceNet embeddings from detected frames
             new_embeddings = await embedding_manager.process_detected_frames(uuid, face_embedding)
@@ -184,41 +167,19 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
 
         if ENABLE_FLOWNET_TRACKING:
             framesGlobals.all_even_frames[frame_index] = frame
-            #draw_tracking_boxes(frame, frame_index)
-        """
-        #Queue even frames for annotation processing
-        if frame_index % 2 == 0:
-            #Directly add even frames for flownet use
-            #framesGlobals.all_even_frames[frame_index] = frame
-            #Detect faces
-            frame_obj = detector.predict(frame, frame_index=frame_index)
-            #Queue the frame for annotation
-            frame_queue.put((frame, frame_obj, frame_index))
-            logger.info(f"Processing frame {frame_index}/{total_frames}")
-        """
+
         frame_obj=None
         if frame_index % 2 == 0:
+            #Detect faces
             frame_obj = detector.predict(frame, frame_index=frame_index)
 
-        #frame_queue.put((frame, frame_obj, frame_index))
+        # Queue the frame for annotation
         frame_queue.put((frame, frame_obj, frame_index))
-        """
-        # Delay FlowNet update and box drawing to happen AFTER previous detection
-        if ENABLE_FLOWNET_TRACKING and previous_frame is not None:
-                tracker = tracker_manager.trackers.get(uuid)
-                if tracker is not None:
-                    tracker.update_track_frame( previous_frame_index)
-                    #draw_tracking_boxes(previous_frame, previous_frame_index)
 
-        # Save current frame for next round
-        previous_frame = frame
-        previous_frame_index = frame_index
-        """
         logger.info(f"Processing frame {frame_index}/{total_frames}")
         if frame_index % 2 == 1:
              #Directly add odd frames to the annotated_frames dictionary
             framesGlobals.annotated_frames[frame_index] = frame
-
 
         frame_index += 1
 
@@ -283,9 +244,9 @@ def check_and_annotate(frame_index, frame):
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
             #Position text above the bounding box and ensure it fits within the frame
-            text = f"{detection1[1]:.2f}%"
+            text = f"FaceNet | {detection1[1]:.2f}%"
             font = cv2.FONT_HERSHEY_COMPLEX
-            font_scale = 0.8
+            font_scale = 0.6
             font_thickness = 2
 
             #Calculate text size and position
@@ -333,9 +294,9 @@ def annotate_frame(frame, frame_obj, similarity_threshold, detected_frames, uuid
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
             #Draw similarity score label
-            text = f"{similarity:.2f}%"
+            text = f"FaceNet |{similarity:.2f}%"
             font = cv2.FONT_HERSHEY_COMPLEX
-            font_scale = 0.8
+            font_scale = 0.6
             font_thickness = 2
 
             #Calculate text size and position
@@ -350,10 +311,6 @@ def annotate_frame(frame, frame_obj, similarity_threshold, detected_frames, uuid
 
             #Register FlowNet tracker
             box = (x1, y1, x2 - x1, y2 - y1)  # convert to (x, y, w, h)
-
-           # tracking_manager = get_tracking_manager()
-
-            #tracker_manager.match_or_add(box, similarity, frame, uuid,SIMILARITY_THRESHOLD=similarity_threshold)
 
             if ENABLE_FLOWNET_TRACKING:
                 tracker_manager.match_or_add(box, similarity, frame_index, uuid,
