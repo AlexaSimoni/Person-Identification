@@ -38,8 +38,9 @@ class TrackingManager:
             )
             logger.info(f"[FlowNet] Tracker created for UUID {uuid}")
         tracker = self.trackers[uuid]
-        # Only initialize ONCE from FaceNet
-       # if tracker.last_box is None and similarity >= SIMILARITY_THRESHOLD:
+        # (Only initialize ONCE from FaceNet:)
+        # if tracker.last_box is None and similarity >= SIMILARITY_THRESHOLD:
+
         # Update tracker only if similarity is above threshold
         if similarity >= SIMILARITY_THRESHOLD:
             if FLOWNET_MATCH_FROM_FACENET_EVERY_TIME or tracker.last_frame_index is None:
@@ -77,12 +78,7 @@ class TrackingManager:
     # Output: List of FlowTracker instances
     def get_all(self):
         return self.trackers.values()
-    """
-    # (Optional) Extract frame index from a custom frame object if such attribute exists
-    def get_frame_index_from_frame(self, frame):
-        #Safely extract frame index
-        return getattr(frame, 'frame_index', None)
-    """
+
     # Returns the currently used FlowNet model (either FlowNetSWrapper or SimpleFlowNet)
     # Inputs: None
     # Output: flow_net instance

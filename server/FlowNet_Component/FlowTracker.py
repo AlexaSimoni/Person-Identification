@@ -31,20 +31,7 @@ class FlowTracker:
         self.frames_since_last_match = 0  # Counter for tracking without FaceNet
         self.use_clip = USE_CLIP_IN_FLOWTRACKING  # Flag from config.py
         logger.info(f"[FlowTracker] Using flow_net type: {type(self.flow_net).__name__}")
-    """
-    def compute_iou(self, boxa, boxb):
-        x_a = max(boxa[0], boxb[0])
-        y_a = max(boxa[1], boxb[1])
-        x_b = min(boxa[0] + boxa[2], boxb[0] + boxb[2])
-        y_b = min(boxa[1] + boxa[3], boxb[1] + boxb[3])
 
-        interarea = max(0, x_b - x_a) * max(0, y_b - y_a)
-        boxaarea = boxa[2] * boxa[3]
-        boxbarea = boxb[2] * boxb[3]
-
-        iou = interarea / float(boxaarea + boxbarea - interarea + 1e-5)
-        return iou
-    """
     # Used to update the tracked bounding box to the current frame using optical flow and CLIP embedding validation
     # Inputs: current_frame_index - index of the new frame to track
     # Output: Updated bounding box (x, y, w, h) if successful, otherwise returns last known box
@@ -74,14 +61,6 @@ class FlowTracker:
             logger.warning(f"[FlowTracker] Skipping frame {current_frame_index} after waiting — still not found")
             return self.last_box
 
-        """
-        # Retrieve previous and current frames
-        prev_frame = all_even_frames[self.last_frame_index]
-        curr_frame = all_even_frames[current_frame_index]
-        if prev_frame is None or curr_frame is None:
-            return self.last_box
-            """
-
         # Apply optical flow to update bounding box
         #updated_box = self.update_bbox_with_optical_flow(prev_frame, curr_frame, self.last_box, current_frame_index)
         updated_box = self.update_bbox_with_optical_flow(self.last_frame_index, current_frame_index, self.last_box)
@@ -107,15 +86,9 @@ class FlowTracker:
                 max_similarity = max(similarities, default=0.0)
                 logger.info(f"[CLIP] Similarity to reference for UUID {self.uuid} at frame {current_frame_index}: {max_similarity:.2f}")
 
-                # similarity = get_best_clip_similarity(self.uuid, clip_emb)
-                # logger.info(
-                #   f"[CLIP] Similarity to reference for UUID {self.uuid} at frame {current_frame_index}: {similarity:.2f}")
-                # Check if appearance is valid for storage
-
                 # If similar enough and unique, store this detection
                 if max_similarity >= CLIP_STORE_THRESHOLD:
                     if is_unique_against_recent_clip_refs(self.uuid, clip_emb, threshold=0.05):
-                        #self.store_flow_detection(curr_frame, updated_box, current_frame_index)
                         self.store_flow_detection(current_frame_index, updated_box)
                         logger.info(f"[FlowNet] Stored unique flow detection with sim={max_similarity:.2f}")
                     else:
@@ -134,16 +107,6 @@ class FlowTracker:
         return self.last_box
 
     # Update bounding box using optical flow between two frames
-    # Inputs: prev_frame (image), next_frame (image), bbox - (x, y, w, h), current_frame_index
-    # Output: updated bounding box (x, y, w, h) if motion detected; otherwise original box
-    #def update_bbox_with_optical_flow(self, prev_frame: np.ndarray, next_frame: np.ndarray, bbox: tuple,
-    #                                 current_frame_index: int):
-    #                               min_motion_threshold: float = 1.0) -> tuple:
-
-
-
-
-    # Update bounding box using optical flow between two frames
     # Inputs: prev_frame_index, current_frame_index - frame indices; bbox - last known (x, y, w, h)
     # Output: updated bounding box (x, y, w, h) if motion detected; otherwise original box
     def update_bbox_with_optical_flow(self, prev_frame_index: int, current_frame_index: int, bbox: tuple):
@@ -157,8 +120,7 @@ class FlowTracker:
         # Use optical flow to update the bounding box between two frames
 
         h_frame, w_frame = prev_frame.shape[:2]
-        # x, y, w, h = bbox
-        #margin_ratio = 0.5
+
         margin_ratio = 1.0
         # Crop areas around the bbox with margin
         prev_crop, (x1, y1) = Cropper.crop_with_margin(prev_frame, bbox, margin_ratio)
@@ -179,79 +141,131 @@ class FlowTracker:
 
         rel_x = int((x - x1) * scale_x)
         rel_y = int((y - y1) * scale_y)
-        w = int(w * scale_x)
-        h = int(h * scale_y)
+        w_scaled = int(w * scale_x)
+        h_scaled = int(h * scale_y)
 
-       # Extract region of interest in the flow map
-        flow_roi = flow[rel_y:rel_y + h, rel_x:rel_x + w]
+        # Guard for bad coords
+        rel_x = max(0, min(rel_x, flow_w - 1))
+        rel_y = max(0, min(rel_y, flow_h - 1))
+        w_scaled = max(1, min(w_scaled, flow_w - rel_x))
+        h_scaled = max(1, min(h_scaled, flow_h - rel_y))
+
+        # Extract region of interest in the flow map
+        flow_roi = flow[rel_y:rel_y + h_scaled, rel_x:rel_x + w_scaled]
+
         flow_x = flow_roi[..., 0]
         flow_y = flow_roi[..., 1]
         magnitude_map = np.sqrt(flow_x ** 2 + flow_y ** 2)
 
-        # Focus on top 30% motion (mask top 30% of high-motion pixels)
+        logger.info(f"[FlowNet] UUID: {self.uuid} | Flow ROI shape: {flow_roi.shape} | Mean mag: {np.mean(magnitude_map):.2f} | Non-zero flow: {np.count_nonzero(magnitude_map):d}")
+
         threshold = np.percentile(magnitude_map, 70)
-        # Focus on top 50% motion
-        # threshold = np.percentile(magnitude_map, 50)
         mask = magnitude_map >= threshold
 
-        # Abort if not enough motion
-        # if np.count_nonzero(mask) < 20
         if np.count_nonzero(mask) < 10:
-            logger.info(f"[FlowNet] UUID: {self.uuid} | Insufficient motion — keeping box")
+            logger.info(f"[FlowNet] UUID: {self.uuid} | Low motion — freezing box.")
             self.frames_since_last_match += 1
             return bbox
 
-        # Compute weighted average displacement (average of dx, dy)
-        weights = magnitude_map[mask]
-        dx = np.sum(flow_x[mask] * weights) / np.sum(weights)
-        dy = np.sum(flow_y[mask] * weights) / np.sum(weights)
+        self.frames_since_last_match = 0
+
+        # center-biased, top-k strongest selection
+        H, W = magnitude_map.shape[:2]
+        yy, xx = np.mgrid[0:H, 0:W]
+        # Gaussian centered in the middle of the bbox to focus on the person
+        sx, sy = 0.30 * W, 0.30 * H  # 30% of width/height as std
+        gauss = np.exp(-(((xx - W / 2) ** 2) / (2 * sx * sx) + ((yy - H / 2) ** 2) / (2 * sy * sy)))
+
+        #weights = magnitude_map[mask]
+        # Combine motion strength and center prior
+        weighted = magnitude_map * gauss
+
+        # Take the strongest K% pixels (default 15%)
+        TOPK_FRAC = 0.15
+        #TOPK_FRAC = 0.5
+        #TOPK_FRAC = 0.2
+        k = max(10, int(weighted.size * TOPK_FRAC))
+        flat_idx = np.argpartition(weighted.ravel(), -k)[-k:]
+        sel_w = weighted.ravel()[flat_idx]
+        sel_fx = flow_x.ravel()[flat_idx]
+        sel_fy = flow_y.ravel()[flat_idx]
+
+        if sel_w.sum() == 0 or k == 0:
+            logger.info(f"[FlowNet] UUID: {self.uuid} | No strong motion — freezing box.")
+            return bbox
+
+        #dx = np.sum(flow_x[mask] * weights) / np.sum(weights)
+        #dy = np.sum(flow_y[mask] * weights) / np.sum(weights)
+        # Weighted average displacement (robust to background)
+        dx = float(np.sum(sel_fx * sel_w) / np.sum(sel_w))
+        dy = float(np.sum(sel_fy * sel_w) / np.sum(sel_w))
         magnitude = np.sqrt(dx ** 2 + dy ** 2)
 
         logger.info(f"[FlowNet] UUID: {self.uuid} | dx: {dx:.2f}, dy: {dy:.2f}, mag: {magnitude:.2f}")
-        # respond to smaller motion
-        min_motion_threshold = 1.0
+
+        # Be more sensitive to small motions
+        #min_motion_threshold = 0.4
+        min_motion_threshold = 0.1
+
         if magnitude < min_motion_threshold:
             self.frames_since_last_match += 1
             return bbox
         else:
             self.frames_since_last_match = 0
 
-        # Apply the flow displacement (movement)
-        x_new = int(x + dx / scale_x)
-        y_new = int(y + dy / scale_y)
-        # Estimate scale based on motion variability (motion spread)
-        std_x = np.std(flow_x[mask])
-        std_y = np.std(flow_y[mask])
-        scale_factor = 1.0 + 2.5 * ((std_x + std_y) / 10.0)
-        # scale_factor = 1.0 + 1.5 * ((std_x + std_y) / 5.0)
+        #x_new = int(round(x + dx / scale_x))
+        #y_new = int(round(y + dy / scale_y))
 
-        # Clamp scale to never shrink under 90%, never grow beyond 120%
-        # scale_factor = np.clip(scale_factor, 0.9, 1.5)
-        scale_factor = np.clip(scale_factor, 0.4, 1.2)
+        # move more decisively, barely resize
+        #MOTION_GAIN = 1.25  # amplify dx,dy to follow the person more aggressively
+        #MOTION_GAIN = 2.0  # amplify dx,dy to follow the person more aggressively
+        MOTION_GAIN = 5.0
+        x_new = int(round(x + MOTION_GAIN * (dx / scale_x)))
+        y_new = int(round(y + MOTION_GAIN * (dy / scale_y)))
 
-        # Resize box and clamp boundaries
-        roi_w = flow_roi.shape[1]
-        roi_h = flow_roi.shape[0]
+        # Very small / no resize
+        NO_RESIZE = False  # set to True to lock size completely
+        MAX_SCALE_DELTA = 0.02  # ±2%
 
-        new_w = int(roi_w / scale_x * scale_factor)
-        new_h = int(roi_h / scale_y * scale_factor)
+        if NO_RESIZE:
+            new_w, new_h = w, h
+        else:
+            std_x = np.std(sel_fx)
+            std_y = np.std(sel_fy)
+            #scale_delta = (std_x + std_y) / 30.0  # heavily dampen
+            #scale_factor = 1.0 + np.clip(scale_delta, -MAX_SCALE_DELTA, MAX_SCALE_DELTA)
+            #new_w = int(w * scale_factor)
+            #new_h = int(h * scale_factor)
+            # Width can resize slightly (±5%)
+            scale_x_factor = 1.0 + np.clip(std_x / 20.0, -0.05, 0.05)
 
-        new_w = max(10, min(new_w, w_frame - x_new))
-        new_h = max(10, min(new_h, h_frame - y_new))
+            # Height is mostly locked (±2% max)
+            scale_y_factor = 1.0 + np.clip(std_y / 100.0, -0.01, 0.01)
+
+            new_w = int(w * scale_x_factor)
+            new_h = int(h * scale_y_factor)
+        #std_x = np.std(flow_x[mask])
+        #std_y = np.std(flow_y[mask])
+        #scale_delta = ((std_x + std_y) / 10.0)
+        #if scale_delta > 0.01:
+        #    scale_factor = 1.0 + min(0.4, scale_delta * 0.8)
+        #else:
+        #    scale_factor = 0.95  # slight shrink when motion is stable
+        #scale_factor = np.clip(scale_factor, 0.9, 1.15)
+
+        #new_w = int(w * scale_factor)
+        #new_h = int(h * scale_factor)
+
+        #new_w = max(10, min(new_w, w_frame - x_new))
+        #new_h = max(10, min(new_h, h_frame - y_new))
+        # Clamp to frame bounds
+        new_w = max(10, min(new_w, w_frame - 1))
+        new_h = max(10, min(new_h, h_frame - 1))
         x_new = max(0, min(x_new, w_frame - new_w))
         y_new = max(0, min(y_new, h_frame - new_h))
-        # Save debug crops for test
-        #cv2.imwrite(f"flow_debug_prev_{self.uuid}.jpg", prev_crop)
-        #cv2.imwrite(f"flow_debug_next_{self.uuid}.jpg", next_crop)
-        logger.info(f"[FlowNet] Updated box → x={x_new}, y={y_new}, w={new_w}, h={new_h}, scale={scale_factor:.2f}")
+
+        #logger.info(f"[FlowNet] Updated box → x={x_new}, y={y_new}, w={new_w}, h={new_h}, scale={scale_factor:.2f}")
         return x_new, y_new, new_w, new_h
-
-        # return x_new, y_new, w, h
-
-    # Saves the cropped image of the current detection to global memory (for later use or DB)
-    # Inputs: frame (image), box - (x, y, w, h), frame_index - index of frame
-    # Output: None (stores image in framesGlobals.flowdetected_frames)
-    #def store_flow_detection(self, frame: np.ndarray, box: tuple, frame_index: int):
 
     # Stores cropped image of updated bounding box into memory (for possible later use or DB upload)
     # Inputs: frame_index - frame ID to retrieve from shared memory; box - (x, y, w, h) bounding box
