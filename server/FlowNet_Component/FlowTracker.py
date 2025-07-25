@@ -31,6 +31,9 @@ class FlowTracker:
         self.frames_since_last_match = 0  # Counter for tracking without FaceNet
         self.use_clip = USE_CLIP_IN_FLOWTRACKING  # Flag from config.py
         logger.info(f"[FlowTracker] Using flow_net type: {type(self.flow_net).__name__}")
+        # Add this:
+        self.initial_clip_embedding = None  # Lock-on reference for identity
+        logger.info(f"[FlowTracker] Using flow_net type: {type(self.flow_net).__name__}")
 
     # Used to update the tracked bounding box to the current frame using optical flow and CLIP embedding validation
     # Inputs: current_frame_index - index of the new frame to track
@@ -39,8 +42,12 @@ class FlowTracker:
         #from server.FlowNet_Component import FlowNet_Utils
         max_wait_attempts = 5
         wait_count = 0
-        CLIP_STORE_THRESHOLD = 0.75 # Minimum similarity for CLIP fallback acceptance
-        CLIP_UPDATE_THRESHOLD = 0.85    # Similarity required to update CLIP references
+        #CLIP_STORE_THRESHOLD = 0.75 # Minimum similarity for CLIP fallback acceptance
+        #CLIP_UPDATE_THRESHOLD = 0.85    # Similarity required to update CLIP references
+        CLIP_STORE_THRESHOLD = 0.80  # Similarity required to store new crops
+        CLIP_UPDATE_THRESHOLD = 0.90  # Similarity required to update references
+        HARD_REJECT_THRESHOLD = 0.60  # Freeze if lower than this
+        SAFE_RESUME_THRESHOLD = 0.70  # Resume if higher than this
 
         # Wait until both frames are available in shared memory
         while (
@@ -65,20 +72,33 @@ class FlowTracker:
         #updated_box = self.update_bbox_with_optical_flow(prev_frame, curr_frame, self.last_box, current_frame_index)
         updated_box = self.update_bbox_with_optical_flow(self.last_frame_index, current_frame_index, self.last_box)
         logger.info(f"[FlowNet] Updated box via optical flow")
+        if updated_box is None:
+            return self.last_box
         if updated_box is not None:
-            self.last_box = updated_box
-            self.last_frame_index = current_frame_index
+            #self.last_box = updated_box
+            #self.last_frame_index = current_frame_index
 
             # Extract image crop from updated box
             x, y, w, h = updated_box
+            curr_frame = all_even_frames[current_frame_index]
+
             if self.use_clip:
             # Extract crop and compute CLIP embedding
-                curr_frame = all_even_frames[current_frame_index]
+                #curr_frame = all_even_frames[current_frame_index]
                 crop = curr_frame[y:y + h, x:x + w]
                 clip_emb = get_clip_embedding(crop)
                 if clip_emb is None:
                     logger.warning(f"[FlowNet] Failed to extract CLIP embedding at frame {current_frame_index}")
                     return self.last_box
+
+                # NEW: Validate against initial CLIP reference
+                if self.initial_clip_embedding is not None:
+                    init_sim = compare_clip_embeddings(self.initial_clip_embedding, clip_emb)
+                    logger.info(f"[CLIP] Initial reference similarity for {self.uuid} = {init_sim:.2f}")
+                    if init_sim < 0.75:  # Threshold for identity mismatch
+                        logger.warning(f"[FlowNet] CLIP validation failed — keeping previous box.")
+                        return self.last_box
+
 
                 # Compare new embedding to existing CLIP reference embeddings
                 refs = flow_clip_reference.get(self.uuid, {}).get("clip_embeddings", [])
@@ -94,7 +114,9 @@ class FlowTracker:
                     else:
                         logger.info(f"[FlowNet] Rejected — not unique against recent crops (sim={max_similarity:.2f})")
 
-                # Update CLIP reference memory if similarity is high
+                #if self.initial_clip_embedding is None or compare_clip_embeddings(self.initial_clip_embedding, clip_emb) >= 0.70:
+
+                    # Update CLIP reference memory if similarity is high
                 if max_similarity >= CLIP_UPDATE_THRESHOLD:
                     add_clip_reference(self.uuid, clip_emb, similarity=max_similarity)
                     logger.info(f"[CLIP] Updated reference list for UUID {self.uuid} (new sim={max_similarity:.2f})")
@@ -103,6 +125,10 @@ class FlowTracker:
                 # Skip CLIP logic, store directly
                 self.store_flow_detection(current_frame_index, updated_box)
                 logger.info(f"[FlowNet] Stored flow detection without CLIP filtering (CLIP disabled)")
+
+        # Commit the bounding box update only after CLIP validation
+        self.last_box = updated_box
+        self.last_frame_index = current_frame_index
 
         return self.last_box
 
@@ -219,7 +245,7 @@ class FlowTracker:
         # move more decisively, barely resize
         #MOTION_GAIN = 1.25  # amplify dx,dy to follow the person more aggressively
         #MOTION_GAIN = 2.0  # amplify dx,dy to follow the person more aggressively
-        MOTION_GAIN = 5.0
+        MOTION_GAIN = 6.0
         x_new = int(round(x + MOTION_GAIN * (dx / scale_x)))
         y_new = int(round(y + MOTION_GAIN * (dy / scale_y)))
 
@@ -237,7 +263,7 @@ class FlowTracker:
             #new_w = int(w * scale_factor)
             #new_h = int(h * scale_factor)
             # Width can resize slightly (±5%)
-            scale_x_factor = 1.0 + np.clip(std_x / 20.0, -0.05, 0.05)
+            scale_x_factor = 1.0 + np.clip(std_x / 30.0, -0.05, 0.05)
 
             # Height is mostly locked (±2% max)
             scale_y_factor = 1.0 + np.clip(std_y / 100.0, -0.01, 0.01)

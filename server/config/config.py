@@ -27,7 +27,7 @@ USE_FLOWNETS = True
 #ENABLE_CLIP_POST_FILTERING: bool = True
 
 # Set to False to disable CLIP filtering and reference updating
-USE_CLIP_IN_FLOWTRACKING = False
+USE_CLIP_IN_FLOWTRACKING = True
 # If True, FlowNet updates from every FaceNet detection above threshold
 # If False, FlowNet initializes only once, then runs independently
-FLOWNET_MATCH_FROM_FACENET_EVERY_TIME = False
+FLOWNET_MATCH_FROM_FACENET_EVERY_TIME = True

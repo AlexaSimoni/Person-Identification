@@ -2,8 +2,10 @@ import logging
 from server.FlowNet_Component.FlowTracker import FlowTracker
 from server.FlowNet_Component.SimpleFlowNet import SimpleFlowNet
 from server.FlowNet_Component.FlowNetSWrapper import FlowNetSWrapper
+from server.Utils.framesGlobals import all_even_frames
 from server.config.config import USE_FLOWNETS, FLOWNET_MODEL_PATH, FLOWNET_MATCH_FROM_FACENET_EVERY_TIME
-from server.FlowNet_Component.clip_utils import try_save_initial_clip_reference, save_clip_reference_on_low_similarity
+from server.FlowNet_Component.clip_utils import try_save_initial_clip_reference, save_clip_reference_on_low_similarity, \
+    get_clip_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +58,20 @@ class TrackingManager:
                     f"[FlowNet] Initialized tracker for UUID {uuid} at frame {tracker.last_frame_index} | sim: {similarity:.2f}%")
 
                 # Save initial CLIP from FaceNet if enabled
-                if tracker.use_clip:
-                    try_save_initial_clip_reference(uuid, frame_index, box)
+                #if tracker.use_clip:
+                if tracker.use_clip and tracker.initial_clip_embedding is None:
+
+                    #try_save_initial_clip_reference(uuid, frame_index, box)
+                    # Also store first CLIP embedding in tracker
+                    #frame = all_even_frames.get(frame_index)
+                    #if tracker.initial_clip_embedding is None:
+                    frame = all_even_frames.get(frame_index)
+                    if frame is not None:
+                            x, y, w, h = box
+                            crop = frame[y:y + h, x:x + w]
+                            tracker.initial_clip_embedding = get_clip_embedding(crop)
+                            logger.info(f"[CLIP] Initial embedding stored for UUID {uuid}")
+
 
         # Optional debug: prevent further updates
         else:
