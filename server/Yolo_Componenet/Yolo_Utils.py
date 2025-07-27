@@ -10,7 +10,7 @@ from torch.fx.experimental.graph_gradual_typechecker import all_eq
 from server.FaceNet_Componenet.FaceNet_Utils import embedding_manager, face_embedding
 from server.Utils.db import detected_frames_collection, embedding_collection
 from server.Yolo_Componenet.YoloV8Detector import YoloV8Detector
-from server.config.config import FACENET_SERVER_URL, MONGODB_URL, SIMILARITY_THRESHOLD
+from server.config.config import FACENET_SERVER_URL, MONGODB_URL, SIMILARITY_THRESHOLD, UPDATE_DB, NUM_OF_FRAMES_UPDATE
 from server.config.config import USE_CLIP_IN_FLOWTRACKING, ENABLE_FLOWNET_TRACKING
 from motor.motor_asyncio import AsyncIOMotorClient
 import threading
@@ -153,17 +153,18 @@ async def process_and_annotate_video(video_path: str, similarity_threshold: floa
         ret, frame = cap.read()
         if not ret:
             break
-        if frame_index % 50 == 0:
-            logger.info(f"[yolo_utils] Refreshing reference embeddings at frame {frame_index}")
+        if UPDATE_DB:
+            if frame_index % NUM_OF_FRAMES_UPDATE == 0:
+                logger.info(f"[yolo_utils] Refreshing reference embeddings at frame {frame_index}")
 
-            # Process and save new FaceNet embeddings from detected frames
-            new_embeddings = await embedding_manager.process_detected_frames(uuid, face_embedding)
-            logger.info(f"[yolo_utils] New FaceNet embeddings added at frame {frame_index}: {len(new_embeddings)}")
+                # Process and save new FaceNet embeddings from detected frames
+                new_embeddings = await embedding_manager.process_detected_frames(uuid, face_embedding)
+                logger.info(f"[yolo_utils] New FaceNet embeddings added at frame {frame_index}: {len(new_embeddings)}")
 
-            # Reload latest reference embeddings from DB
-            new_data = await embedding_manager.get_reference_embeddings(uuid)
-            reference_embeddings["data"] = new_data
-            logger.info(f"[yolo_utils] Total reference embeddings now: {len(new_data.get('embeddings', []))}")
+                # Reload latest reference embeddings from DB
+                new_data = await embedding_manager.get_reference_embeddings(uuid)
+                reference_embeddings["data"] = new_data
+                logger.info(f"[yolo_utils] Total reference embeddings now: {len(new_data.get('embeddings', []))}")
 
         if ENABLE_FLOWNET_TRACKING:
             framesGlobals.all_even_frames[frame_index] = frame

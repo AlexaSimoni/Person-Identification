@@ -42,8 +42,6 @@ class FlowTracker:
         #from server.FlowNet_Component import FlowNet_Utils
         max_wait_attempts = 5
         wait_count = 0
-        #CLIP_STORE_THRESHOLD = 0.75 # Minimum similarity for CLIP fallback acceptance
-        #CLIP_UPDATE_THRESHOLD = 0.85    # Similarity required to update CLIP references
         CLIP_STORE_THRESHOLD = 0.80  # Similarity required to store new crops
         CLIP_UPDATE_THRESHOLD = 0.90  # Similarity required to update references
         HARD_REJECT_THRESHOLD = 0.60  # Freeze if lower than this
@@ -69,22 +67,17 @@ class FlowTracker:
             return self.last_box
 
         # Apply optical flow to update bounding box
-        #updated_box = self.update_bbox_with_optical_flow(prev_frame, curr_frame, self.last_box, current_frame_index)
         updated_box = self.update_bbox_with_optical_flow(self.last_frame_index, current_frame_index, self.last_box)
         logger.info(f"[FlowNet] Updated box via optical flow")
         if updated_box is None:
             return self.last_box
         if updated_box is not None:
-            #self.last_box = updated_box
-            #self.last_frame_index = current_frame_index
-
             # Extract image crop from updated box
             x, y, w, h = updated_box
             curr_frame = all_even_frames[current_frame_index]
 
             if self.use_clip:
             # Extract crop and compute CLIP embedding
-                #curr_frame = all_even_frames[current_frame_index]
                 crop = curr_frame[y:y + h, x:x + w]
                 clip_emb = get_clip_embedding(crop)
                 if clip_emb is None:
@@ -95,7 +88,7 @@ class FlowTracker:
                 if self.initial_clip_embedding is not None:
                     init_sim = compare_clip_embeddings(self.initial_clip_embedding, clip_emb)
                     logger.info(f"[CLIP] Initial reference similarity for {self.uuid} = {init_sim:.2f}")
-                    if init_sim < 0.75:  # Threshold for identity mismatch
+                    if init_sim < 0.77:  # Threshold for identity mismatch
                         logger.warning(f"[FlowNet] CLIP validation failed — keeping previous box.")
                         return self.last_box
 
@@ -114,9 +107,8 @@ class FlowTracker:
                     else:
                         logger.info(f"[FlowNet] Rejected — not unique against recent crops (sim={max_similarity:.2f})")
 
-                #if self.initial_clip_embedding is None or compare_clip_embeddings(self.initial_clip_embedding, clip_emb) >= 0.70:
 
-                    # Update CLIP reference memory if similarity is high
+                # Update CLIP reference memory if similarity is high
                 if max_similarity >= CLIP_UPDATE_THRESHOLD:
                     add_clip_reference(self.uuid, clip_emb, similarity=max_similarity)
                     logger.info(f"[CLIP] Updated reference list for UUID {self.uuid} (new sim={max_similarity:.2f})")
@@ -202,14 +194,11 @@ class FlowTracker:
         sx, sy = 0.30 * W, 0.30 * H  # 30% of width/height as std
         gauss = np.exp(-(((xx - W / 2) ** 2) / (2 * sx * sx) + ((yy - H / 2) ** 2) / (2 * sy * sy)))
 
-        #weights = magnitude_map[mask]
         # Combine motion strength and center prior
         weighted = magnitude_map * gauss
 
         # Take the strongest K% pixels (default 15%)
         TOPK_FRAC = 0.15
-        #TOPK_FRAC = 0.5
-        #TOPK_FRAC = 0.2
         k = max(10, int(weighted.size * TOPK_FRAC))
         flat_idx = np.argpartition(weighted.ravel(), -k)[-k:]
         sel_w = weighted.ravel()[flat_idx]
@@ -220,8 +209,6 @@ class FlowTracker:
             logger.info(f"[FlowNet] UUID: {self.uuid} | No strong motion — freezing box.")
             return bbox
 
-        #dx = np.sum(flow_x[mask] * weights) / np.sum(weights)
-        #dy = np.sum(flow_y[mask] * weights) / np.sum(weights)
         # Weighted average displacement (robust to background)
         dx = float(np.sum(sel_fx * sel_w) / np.sum(sel_w))
         dy = float(np.sum(sel_fy * sel_w) / np.sum(sel_w))
@@ -230,7 +217,6 @@ class FlowTracker:
         logger.info(f"[FlowNet] UUID: {self.uuid} | dx: {dx:.2f}, dy: {dy:.2f}, mag: {magnitude:.2f}")
 
         # Be more sensitive to small motions
-        #min_motion_threshold = 0.4
         min_motion_threshold = 0.1
 
         if magnitude < min_motion_threshold:
@@ -239,13 +225,8 @@ class FlowTracker:
         else:
             self.frames_since_last_match = 0
 
-        #x_new = int(round(x + dx / scale_x))
-        #y_new = int(round(y + dy / scale_y))
-
         # move more decisively, barely resize
-        #MOTION_GAIN = 1.25  # amplify dx,dy to follow the person more aggressively
-        #MOTION_GAIN = 2.0  # amplify dx,dy to follow the person more aggressively
-        MOTION_GAIN = 6.0
+        MOTION_GAIN = 6.0 #amplify dx,dy to follow the person more aggressively
         x_new = int(round(x + MOTION_GAIN * (dx / scale_x)))
         y_new = int(round(y + MOTION_GAIN * (dy / scale_y)))
 
@@ -258,32 +239,14 @@ class FlowTracker:
         else:
             std_x = np.std(sel_fx)
             std_y = np.std(sel_fy)
-            #scale_delta = (std_x + std_y) / 30.0  # heavily dampen
-            #scale_factor = 1.0 + np.clip(scale_delta, -MAX_SCALE_DELTA, MAX_SCALE_DELTA)
-            #new_w = int(w * scale_factor)
-            #new_h = int(h * scale_factor)
             # Width can resize slightly (±5%)
             scale_x_factor = 1.0 + np.clip(std_x / 30.0, -0.05, 0.05)
-
             # Height is mostly locked (±2% max)
             scale_y_factor = 1.0 + np.clip(std_y / 100.0, -0.01, 0.01)
-
             new_w = int(w * scale_x_factor)
             new_h = int(h * scale_y_factor)
-        #std_x = np.std(flow_x[mask])
-        #std_y = np.std(flow_y[mask])
-        #scale_delta = ((std_x + std_y) / 10.0)
-        #if scale_delta > 0.01:
-        #    scale_factor = 1.0 + min(0.4, scale_delta * 0.8)
-        #else:
-        #    scale_factor = 0.95  # slight shrink when motion is stable
-        #scale_factor = np.clip(scale_factor, 0.9, 1.15)
+            #new_h=h
 
-        #new_w = int(w * scale_factor)
-        #new_h = int(h * scale_factor)
-
-        #new_w = max(10, min(new_w, w_frame - x_new))
-        #new_h = max(10, min(new_h, h_frame - y_new))
         # Clamp to frame bounds
         new_w = max(10, min(new_w, w_frame - 1))
         new_h = max(10, min(new_h, h_frame - 1))

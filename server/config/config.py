@@ -14,18 +14,22 @@ FLOWNET_FOLDER = os.getenv("FLOWNET_FOLDER", join(ROOT_PATH, "FlowNet_Component"
 #FLOWNET_MODEL_PATH = os.getenv("FLOWNET_MODEL_PATH", join(ROOT_PATH, "FlowNet_Component", "checkpoints", "FlowNetS_checkpoint.pth.tar"))
 FLOWNET_MODEL_PATH = os.getenv("FLOWNET_MODEL_PATH", join(ROOT_PATH, "..", "FlowNet_Component", "checkpoints", "flownets_from_caffe.pth"))
 #USE_FLOWNETS = os.getenv("USE_FLOWNETS", "false").lower() == "true"
-
 # or False to disable
 CLEAR_UUID_HISTORY_BEFORE_RUN = False
-# or False to disable
-CLEAR_ALL_HISTORY_BEFORE_RUN = True
-
-# Controls whether FlowNet tracking logic should be used at all
-ENABLE_FLOWNET_TRACKING = True
 # Controls using FLOWNETS - flownets_from_caffe
 USE_FLOWNETS = True
-#ENABLE_CLIP_POST_FILTERING: bool = True
 
+
+
+
+# or False to disable
+CLEAR_ALL_HISTORY_BEFORE_RUN = True
+# controls whether new detections are updated to DB during session (50 frames)
+UPDATE_DB=True
+NUM_OF_FRAMES_UPDATE=50
+# Controls whether FlowNet tracking logic should be used at all
+ENABLE_FLOWNET_TRACKING = True
+#ENABLE_CLIP_POST_FILTERING: bool = True
 # Set to False to disable CLIP filtering and reference updating
 USE_CLIP_IN_FLOWTRACKING = True
 # If True, FlowNet updates from every FaceNet detection above threshold
