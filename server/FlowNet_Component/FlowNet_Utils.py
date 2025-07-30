@@ -136,9 +136,6 @@ async def insert_flow_detected_frames(uuid: str, running_id: str, frame_per_seco
         if embedding is not None:
             similarity = compute_similarity(reference_record, base64_crop)
 
-        # If FaceNet fails or similarity is low, run CLIP fallback
-        #if embedding is None or similarity < SIMILARITY_THRESHOLD:
-
         # If FaceNet fails or similarity is low, optionally run CLIP fallback
         if embedding is None or similarity < SIMILARITY_THRESHOLD:
             if USE_CLIP_IN_FLOWTRACKING:

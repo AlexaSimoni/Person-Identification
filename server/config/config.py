@@ -16,22 +16,25 @@ FLOWNET_MODEL_PATH = os.getenv("FLOWNET_MODEL_PATH", join(ROOT_PATH, "..", "Flow
 #USE_FLOWNETS = os.getenv("USE_FLOWNETS", "false").lower() == "true"
 # or False to disable
 CLEAR_UUID_HISTORY_BEFORE_RUN = False
-# Controls using FLOWNETS - flownets_from_caffe
+# Controls using FLOWNETS (flownets_from_caffe) for current project version as stronger flow motion prediction model
 USE_FLOWNETS = True
 
 
+# --------------- Those parameters could be changed in order to run modules separately --------
 
-
-# or False to disable
+# To ensure clear detections data history before running a new search
 CLEAR_ALL_HISTORY_BEFORE_RUN = True
-# controls whether new detections are updated to DB during session (50 frames)
-UPDATE_DB=True
+# controls whether new detections are updated to DB during session (every 50 frames)
+UPDATE_DB = True
 NUM_OF_FRAMES_UPDATE=50
-# Controls whether FlowNet tracking logic should be used at all
+# Controls whether FlowNet tracking logic should be used at all (or only YOLO+FaceNet)
 ENABLE_FLOWNET_TRACKING = True
-#ENABLE_CLIP_POST_FILTERING: bool = True
+# amplify dx,dy to follow the person more aggressively (~3-6)
+MOTION_GAIN_SET = 5
 # Set to False to disable CLIP filtering and reference updating
 USE_CLIP_IN_FLOWTRACKING = True
+# Threshold for identity mismatch (~0.7-0.82)
+CLIP_SIM_THRESHOLD = 0.77
 # If True, FlowNet updates from every FaceNet detection above threshold
 # If False, FlowNet initializes only once, then runs independently
 FLOWNET_MATCH_FROM_FACENET_EVERY_TIME = True

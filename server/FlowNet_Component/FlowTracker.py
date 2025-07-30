@@ -12,7 +12,7 @@ from server.FlowNet_Component.clip_utils import (
     add_clip_reference, is_unique_against_recent_clip_refs
 )
 from server.Utils import framesGlobals
-from server.config.config import USE_CLIP_IN_FLOWTRACKING
+from server.config.config import USE_CLIP_IN_FLOWTRACKING, MOTION_GAIN_SET, CLIP_SIM_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +88,9 @@ class FlowTracker:
                 if self.initial_clip_embedding is not None:
                     init_sim = compare_clip_embeddings(self.initial_clip_embedding, clip_emb)
                     logger.info(f"[CLIP] Initial reference similarity for {self.uuid} = {init_sim:.2f}")
-                    if init_sim < 0.77:  # Threshold for identity mismatch
+                    #if init_sim < 0.77:  # Threshold for identity mismatch
+                    if init_sim < CLIP_SIM_THRESHOLD:  # Threshold for identity mismatch
+
                         logger.warning(f"[FlowNet] CLIP validation failed — keeping previous box.")
                         return self.last_box
 
@@ -139,6 +141,7 @@ class FlowTracker:
 
         h_frame, w_frame = prev_frame.shape[:2]
 
+        #margin_ratio = 1.2
         margin_ratio = 1.0
         # Crop areas around the bbox with margin
         prev_crop, (x1, y1) = Cropper.crop_with_margin(prev_frame, bbox, margin_ratio)
@@ -226,7 +229,8 @@ class FlowTracker:
             self.frames_since_last_match = 0
 
         # move more decisively, barely resize
-        MOTION_GAIN = 6.0 #amplify dx,dy to follow the person more aggressively
+        #MOTION_GAIN = 6 #amplify dx,dy to follow the person more aggressively
+        MOTION_GAIN = MOTION_GAIN_SET #amplify dx,dy to follow the person more aggressively
         x_new = int(round(x + MOTION_GAIN * (dx / scale_x)))
         y_new = int(round(y + MOTION_GAIN * (dy / scale_y)))
 
